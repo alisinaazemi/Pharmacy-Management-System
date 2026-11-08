@@ -1,0 +1,6 @@
+{
+  "name": "Pharmacy Management System (PMS)",
+  "description": "Comprehensive, bilingual (English & Persian) Pharmacy Management System for inventory, sales, purchases, suppliers, and reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
