@@ -9,11 +9,11 @@ import {
   Building2,
   Tags,
   Receipt,
-  ArrowUpRight,
   Plus,
   ShoppingCart,
   Truck,
   SlidersHorizontal,
+  ArrowRight,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { StatCard } from '../common/StatCard';
@@ -43,6 +43,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     expiredMedicines,
     nearExpiryMedicines,
     formatCurrency,
+    formatDate,
     setActiveView,
     currentRole,
     t,
@@ -50,25 +51,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const [selectedReceipt, setSelectedReceipt] = useState<Sale | null>(null);
 
-  // Computations
   const totalStockUnits = medicines.reduce((sum, m) => sum + (m.isActive ? m.quantity : 0), 0);
   const totalInventoryCost = medicines.reduce(
     (sum, m) => sum + (m.isActive ? m.quantity * m.purchasePrice : 0),
     0
   );
 
-  // Sales computations
   const todayStr = new Date().toISOString().split('T')[0];
-  const todaySales = sales
-    .filter((s) => s.dateTime.startsWith(todayStr))
-    .reduce((sum, s) => sum + s.grandTotal, 0);
-
+  const todaySalesList = sales.filter((s) => s.dateTime.startsWith(todayStr));
+  const todaySales = todaySalesList.reduce((sum, s) => sum + s.grandTotal, 0);
   const monthlySales = sales.reduce((sum, s) => sum + s.grandTotal, 0);
 
-  // Recent sales transactions (last 5)
   const recentSales = sales.slice(0, 5);
 
-  // Urgent alerts list (low stock or expired/near-expiry)
   const urgentAlerts = [
     ...expiredMedicines.map((m) => ({
       ...m,
@@ -146,8 +141,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label={t('dashboard.totalMedicines')}
-          value={medicines.length}
-          subtext={`${categories.length} ${t('nav.categories').toLowerCase()}`}
+          value={medicines.filter((m) => m.isActive).length}
+          subtext={t('dashboard.categoriesCountLabel', { count: categories.filter((c) => c.isActive).length })}
           icon={<Pill className="w-5 h-5" />}
           onClick={() => setActiveView('medicines')}
         />
@@ -157,54 +152,66 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           value={totalStockUnits.toLocaleString()}
           subtext={`${t('dashboard.inventoryValue')}: ${formatCurrency(totalInventoryCost)}`}
           icon={<Boxes className="w-5 h-5" />}
-          onClick={() => setActiveView('inventory')}
+          onClick={() => (currentRole !== 'Cashier' ? setActiveView('inventory') : setActiveView('medicines'))}
         />
 
         <StatCard
           label={t('dashboard.todaySales')}
           value={formatCurrency(todaySales)}
-          subtext={`${sales.filter((s) => s.dateTime.startsWith(todayStr)).length} ${t('reports.unitsSold')}`}
+          subtext={t('dashboard.ordersCount', { count: todaySalesList.length })}
           icon={<CircleDollarSign className="w-5 h-5" />}
-          trend={{ value: `${sales.length} orders`, isPositive: true }}
+          trend={{ value: t('dashboard.ordersCount', { count: sales.length }), isPositive: true }}
           onClick={() => setActiveView('sales-history')}
         />
 
         <StatCard
           label={t('dashboard.monthlySales')}
           value={formatCurrency(monthlySales)}
-          subtext={`${purchases.length} purchases`}
+          subtext={t('dashboard.purchasesCount', { count: purchases.length })}
           icon={<TrendingUp className="w-5 h-5" />}
-          onClick={() => setActiveView('reports')}
+          onClick={() => (currentRole !== 'Cashier' ? setActiveView('reports') : setActiveView('sales-history'))}
         />
 
         <StatCard
           label={t('dashboard.lowStockAlerts')}
           value={lowStockMedicines.length}
-          subtext={lowStockMedicines.length > 0 ? 'Requires restocking' : 'Optimal levels'}
+          subtext={
+            lowStockMedicines.length > 0
+              ? t('dashboard.requiresRestocking')
+              : t('dashboard.optimalLevels')
+          }
           icon={<AlertTriangle className="w-5 h-5" />}
           trend={{
-            value: lowStockMedicines.length > 0 ? `${lowStockMedicines.length} critical` : 'None',
+            value:
+              lowStockMedicines.length > 0
+                ? t('dashboard.criticalCountLabel', { count: lowStockMedicines.length })
+                : t('dashboard.noneLabel'),
             isWarning: lowStockMedicines.length > 0,
+            isPositive: lowStockMedicines.length === 0,
           }}
-          onClick={() => setActiveView('inventory')}
+          onClick={() => currentRole !== 'Cashier' && setActiveView('inventory')}
         />
 
         <StatCard
           label={t('dashboard.expiredMedicines')}
           value={expiredMedicines.length + nearExpiryMedicines.length}
-          subtext={`${expiredMedicines.length} expired · ${nearExpiryMedicines.length} near expiry`}
+          subtext={`${t('dashboard.expiredShort', { count: expiredMedicines.length })} · ${t('dashboard.nearExpiryShort', { count: nearExpiryMedicines.length })}`}
           icon={<Clock className="w-5 h-5" />}
           trend={{
-            value: expiredMedicines.length > 0 ? `${expiredMedicines.length} expired` : 'Clear',
+            value:
+              expiredMedicines.length > 0
+                ? t('dashboard.expiredShort', { count: expiredMedicines.length })
+                : t('dashboard.clearStatus'),
             isWarning: expiredMedicines.length > 0,
+            isPositive: expiredMedicines.length === 0,
           }}
-          onClick={() => setActiveView('inventory')}
+          onClick={() => currentRole !== 'Cashier' && setActiveView('inventory')}
         />
 
         <StatCard
           label={t('dashboard.activeSuppliers')}
           value={suppliers.filter((s) => s.isActive).length}
-          subtext={`${purchases.length} total orders`}
+          subtext={t('dashboard.purchasesCount', { count: purchases.length })}
           icon={<Building2 className="w-5 h-5" />}
           onClick={() => currentRole !== 'Cashier' && setActiveView('suppliers')}
         />
@@ -212,7 +219,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <StatCard
           label={t('nav.categories')}
           value={categories.filter((c) => c.isActive).length}
-          subtext="Therapeutic categories"
+          subtext={t('dashboard.therapeuticCategories')}
           icon={<Tags className="w-5 h-5" />}
           onClick={() => currentRole !== 'Cashier' && setActiveView('categories')}
         />
@@ -228,7 +235,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {t('dashboard.salesVsPurchasesTrend')}
               </h2>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                Daily comparison of counter revenue and supplier inventory spend
+                {t('dashboard.salesVsPurchasesSubtitle')}
               </p>
             </div>
           </div>
@@ -243,7 +250,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <AlertTriangle className="w-4 h-4 text-amber-500" />
                 <span>{t('dashboard.urgentAlertsTitle')}</span>
               </h2>
-              <span className="text-xs text-neutral-400 tabular-nums">
+              <span className="text-xs text-neutral-500 dark:text-neutral-400 tabular-nums font-mono">
                 {urgentAlerts.length}
               </span>
             </div>
@@ -255,15 +262,19 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </div>
               ) : (
                 urgentAlerts.map((med, idx) => (
-                  <div key={idx} className="py-2.5 flex items-center justify-between text-xs">
+                  <div key={`${med.id}-${med.alertType}-${idx}`} className="py-2.5 flex items-center justify-between text-xs">
                     <div className="min-w-0 pe-2">
                       <p className="font-semibold text-neutral-900 dark:text-neutral-100 truncate">
                         {med.name}
                       </p>
                       <div className="flex items-center gap-2 text-[11px] text-neutral-500 dark:text-neutral-400 mt-0.5">
-                        <span>Batch: {med.batchNumber}</span>
+                        <span>
+                          {t('dashboard.batchPrefix')}: {med.batchNumber}
+                        </span>
                         <span aria-hidden="true">·</span>
-                        <span className="tabular-nums">Exp: {med.expirationDate}</span>
+                        <span className="tabular-nums">
+                          {t('dashboard.expPrefix')}: {formatDate(med.expirationDate)}
+                        </span>
                       </div>
                     </div>
 
@@ -272,8 +283,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         className={`text-[11px] font-bold tabular-nums ${
                           med.alertType === 'expired'
                             ? 'text-rose-600 dark:text-rose-400'
-                            : med.alertType === 'nearExpiry'
-                            ? 'text-amber-600 dark:text-amber-400'
                             : 'text-amber-600 dark:text-amber-400'
                         }`}
                       >
@@ -288,10 +297,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 mt-4">
             <button
-              onClick={() => setActiveView('inventory')}
-              className="w-full text-center text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors cursor-pointer"
+              type="button"
+              onClick={() => setActiveView(currentRole === 'Cashier' ? 'medicines' : 'inventory')}
+              className="w-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 transition-colors cursor-pointer"
             >
-              {t('dashboard.viewAllMedicines')} →
+              <span>{t('dashboard.viewAllMedicines')}</span>
+              <ArrowRight className="w-3.5 h-3.5 rtl:rotate-180" />
             </button>
           </div>
         </div>
@@ -299,13 +310,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       {/* Recent Sales Transactions (FR-17, FR-24) */}
       <div className="p-5 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl">
-        <div className="flex items-center justify-between pb-4 border-b border-neutral-100 dark:border-neutral-800 mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-neutral-100 dark:border-neutral-800 mb-3">
           <div>
             <h2 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
               {t('dashboard.recentSalesTitle')}
             </h2>
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
-              Real-time register transactions processed at cashier stations
+              {t('dashboard.recentSalesSubtitle')}
             </p>
           </div>
           <Button
@@ -340,7 +351,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     {sale.id}
                   </td>
                   <td className="py-3 px-3 text-neutral-500 dark:text-neutral-400 tabular-nums">
-                    {sale.dateTime}
+                    {formatDate(sale.dateTime, true)}
                   </td>
                   <td className="py-3 px-3 text-neutral-800 dark:text-neutral-200">
                     {sale.customerName}

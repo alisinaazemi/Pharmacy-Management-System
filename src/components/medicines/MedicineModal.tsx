@@ -16,9 +16,10 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
   onClose,
   medicineToEdit,
 }) => {
-  const { categories, addMedicine, updateMedicine, t } = useApp();
+  const { categories, medicines, addMedicine, updateMedicine, language, settings, t } = useApp();
 
   const [formData, setFormData] = useState({
+    id: '',
     name: '',
     genericName: '',
     categoryId: '',
@@ -28,7 +29,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
     purchasePrice: 0,
     sellingPrice: 0,
     quantity: 0,
-    minStockLevel: 25,
+    minStockLevel: settings.defaultMinStockLevel || 25,
     unit: 'Box',
     description: '',
     isActive: true,
@@ -37,8 +38,10 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
+    const activeCategories = categories.filter((c) => c.isActive);
     if (medicineToEdit) {
       setFormData({
+        id: medicineToEdit.id,
         name: medicineToEdit.name,
         genericName: medicineToEdit.genericName,
         categoryId: medicineToEdit.categoryId,
@@ -55,26 +58,33 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
       });
     } else {
       setFormData({
+        id: '',
         name: '',
         genericName: '',
-        categoryId: categories[0]?.id || '',
+        categoryId: activeCategories[0]?.id || categories[0]?.id || '',
         manufacturer: '',
         batchNumber: `BTH-${Math.floor(1000 + Math.random() * 9000)}`,
         expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         purchasePrice: 50,
         sellingPrice: 80,
         quantity: 50,
-        minStockLevel: 20,
-        unit: 'Box',
+        minStockLevel: settings.defaultMinStockLevel || 25,
+        unit: language === 'fa' ? 'جعبه' : 'Box',
         description: '',
         isActive: true,
       });
     }
     setErrors({});
-  }, [medicineToEdit, isOpen, categories]);
+  }, [medicineToEdit, isOpen, categories, settings.defaultMinStockLevel, language]);
 
   const validate = () => {
     const err: Record<string, string> = {};
+    if (!medicineToEdit && formData.id.trim()) {
+      const normalizedId = formData.id.trim().toUpperCase();
+      if (medicines.some((m) => m.id.toUpperCase() === normalizedId)) {
+        err.id = t('validation.medicineExists');
+      }
+    }
     if (!formData.name.trim()) err.name = t('validation.missingMedicineName');
     if (!formData.categoryId) err.categoryId = t('validation.requiredField');
     if (!formData.batchNumber.trim()) err.batchNumber = t('validation.requiredField');
@@ -97,32 +107,72 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
 
     if (medicineToEdit) {
       updateMedicine(medicineToEdit.id, {
-        ...formData,
+        name: formData.name.trim(),
+        genericName: formData.genericName.trim(),
+        categoryId: formData.categoryId,
         categoryName,
+        manufacturer: formData.manufacturer.trim(),
+        batchNumber: formData.batchNumber.trim(),
+        expirationDate: formData.expirationDate,
+        purchasePrice: formData.purchasePrice,
+        sellingPrice: formData.sellingPrice,
+        quantity: formData.quantity,
+        minStockLevel: formData.minStockLevel,
+        unit: formData.unit.trim() || 'Unit',
+        description: formData.description.trim(),
+        isActive: formData.isActive,
       });
     } else {
       addMedicine({
-        ...formData,
+        id: formData.id.trim() || undefined,
+        name: formData.name.trim(),
+        genericName: formData.genericName.trim(),
+        categoryId: formData.categoryId,
         categoryName,
+        manufacturer: formData.manufacturer.trim(),
+        batchNumber: formData.batchNumber.trim(),
+        expirationDate: formData.expirationDate,
+        purchasePrice: formData.purchasePrice,
+        sellingPrice: formData.sellingPrice,
+        quantity: formData.quantity,
+        minStockLevel: formData.minStockLevel,
+        unit: formData.unit.trim() || 'Unit',
+        description: formData.description.trim(),
+        isActive: formData.isActive,
       });
     }
     onClose();
   };
+
+  // Show active categories + the currently assigned category when editing
+  const selectableCategories = categories.filter(
+    (c) => c.isActive || (medicineToEdit && c.id === medicineToEdit.categoryId)
+  );
 
   return (
     <Modal
       isOpen={isOpen}
       onClose={onClose}
       title={medicineToEdit ? t('medicines.editMedicine') : t('medicines.addMedicine')}
-      subtitle="Complete pharmaceutical catalog record compliant with SRS FR-04"
+      subtitle={t('medicines.modalSubtitle')}
       maxWidth="2xl"
     >
       <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+        {!medicineToEdit && (
+          <Input
+            label={t('medicines.id')}
+            placeholder={t('medicines.idPlaceholder')}
+            value={formData.id}
+            onChange={(e) => setFormData({ ...formData, id: e.target.value })}
+            error={errors.id}
+          />
+        )}
+
         {/* Row 1: Name and Generic Name */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
             label={t('medicines.name')}
-            placeholder="e.g. Amoxicillin 500mg"
+            placeholder={t('medicines.namePlaceholder')}
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             error={errors.name}
@@ -130,7 +180,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
           />
           <Input
             label={t('medicines.genericName')}
-            placeholder="e.g. Amoxicillin Trihydrate"
+            placeholder={t('medicines.genericPlaceholder')}
             value={formData.genericName}
             onChange={(e) => setFormData({ ...formData, genericName: e.target.value })}
           />
@@ -142,12 +192,15 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
             label={t('medicines.category')}
             value={formData.categoryId}
             onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
-            options={categories.map((c) => ({ value: c.id, label: c.name }))}
+            options={selectableCategories.map((c) => ({
+              value: c.id,
+              label: language === 'fa' ? c.nameFa || c.name : c.name,
+            }))}
             error={errors.categoryId}
           />
           <Input
             label={t('medicines.manufacturer')}
-            placeholder="e.g. GlaxoSmithKline"
+            placeholder={t('medicines.manufacturerPlaceholder')}
             value={formData.manufacturer}
             onChange={(e) => setFormData({ ...formData, manufacturer: e.target.value })}
           />
@@ -157,7 +210,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Input
             label={t('medicines.batchNumber')}
-            placeholder="e.g. BTH-8821"
+            placeholder={t('medicines.batchPlaceholder')}
             value={formData.batchNumber}
             onChange={(e) => setFormData({ ...formData, batchNumber: e.target.value })}
             error={errors.batchNumber}
@@ -173,7 +226,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
           />
           <Input
             label={t('medicines.unit')}
-            placeholder="Box / Strip / Bottle"
+            placeholder={t('medicines.unitPlaceholder')}
             value={formData.unit}
             onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
           />
@@ -231,7 +284,7 @@ export const MedicineModal: React.FC<MedicineModalProps> = ({
             className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-xs px-3 py-2 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
             value={formData.description}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Clinical indications, dosage guidelines, storage requirements..."
+            placeholder={t('medicines.descriptionPlaceholder')}
           />
         </div>
 

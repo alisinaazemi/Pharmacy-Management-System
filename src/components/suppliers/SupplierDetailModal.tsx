@@ -3,7 +3,7 @@ import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { Supplier } from '../../types';
 import { useApp } from '../../context/AppContext';
-import { Building2, Phone, Mail, MapPin, Package, FileText } from 'lucide-react';
+import { Phone, Mail, MapPin, FileText } from 'lucide-react';
 
 interface SupplierDetailModalProps {
   isOpen: boolean;
@@ -18,11 +18,10 @@ export const SupplierDetailModal: React.FC<SupplierDetailModalProps> = ({
   supplier,
   onEdit,
 }) => {
-  const { purchases, formatCurrency, t } = useApp();
+  const { purchases, formatCurrency, formatDate, getPaymentStatusLabel, t } = useApp();
 
   if (!supplier) return null;
 
-  // Associated purchase transactions (FR-23)
   const supplierPurchases = purchases.filter((p) => p.supplierId === supplier.id);
   const totalVolume = supplierPurchases.reduce((sum, p) => sum + p.totalAmount, 0);
 
@@ -44,12 +43,12 @@ export const SupplierDetailModal: React.FC<SupplierDetailModalProps> = ({
 
           <div className="flex items-center gap-2 text-neutral-700 dark:text-neutral-300">
             <Mail className="w-4 h-4 text-neutral-400 shrink-0" />
-            <span className="truncate">{supplier.email || 'N/A'}</span>
+            <span className="truncate">{supplier.email || '-'}</span>
           </div>
 
           <div className="flex items-center gap-2 text-neutral-700 dark:text-neutral-300">
             <MapPin className="w-4 h-4 text-neutral-400 shrink-0" />
-            <span className="truncate">{supplier.address || 'N/A'}</span>
+            <span className="truncate">{supplier.address || '-'}</span>
           </div>
         </div>
 
@@ -67,20 +66,22 @@ export const SupplierDetailModal: React.FC<SupplierDetailModalProps> = ({
           <div className="flex items-center justify-between">
             <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-1.5">
               <FileText className="w-3.5 h-3.5 text-neutral-400" />
-              <span>{t('suppliers.purchaseHistory')} ({supplierPurchases.length})</span>
+              <span>
+                {t('suppliers.purchaseHistory')} ({supplierPurchases.length})
+              </span>
             </h4>
             <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-              Total: {formatCurrency(totalVolume)}
+              {t('common.total')}: {formatCurrency(totalVolume)}
             </span>
           </div>
 
-          <div className="border border-neutral-200 dark:border-neutral-800 rounded-lg overflow-hidden">
+          <div className="border border-neutral-200 dark:border-neutral-800 rounded-lg overflow-x-auto">
             <table className="w-full text-xs text-start">
               <thead className="bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-200 dark:border-neutral-800 text-neutral-500 font-semibold">
                 <tr>
-                  <th className="py-2.5 px-3 text-start">PO #</th>
+                  <th className="py-2.5 px-3 text-start">{t('purchases.tableHeaders.id')}</th>
                   <th className="py-2.5 px-3 text-start">{t('common.date')}</th>
-                  <th className="py-2.5 px-3 text-start">Invoice #</th>
+                  <th className="py-2.5 px-3 text-start">{t('purchases.invoiceNumber')}</th>
                   <th className="py-2.5 px-3 text-center">{t('common.items')}</th>
                   <th className="py-2.5 px-3 text-end">{t('common.total')}</th>
                   <th className="py-2.5 px-3 text-center">{t('common.status')}</th>
@@ -90,7 +91,7 @@ export const SupplierDetailModal: React.FC<SupplierDetailModalProps> = ({
                 {supplierPurchases.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="py-6 text-center text-neutral-400">
-                      No purchase orders recorded for this supplier yet.
+                      {t('suppliers.noPurchaseHistory')}
                     </td>
                   </tr>
                 ) : (
@@ -99,15 +100,21 @@ export const SupplierDetailModal: React.FC<SupplierDetailModalProps> = ({
                       <td className="py-2.5 px-3 font-mono font-semibold text-neutral-900 dark:text-neutral-100">
                         {p.id}
                       </td>
-                      <td className="py-2.5 px-3 text-neutral-500 font-mono tabular-nums">{p.date}</td>
-                      <td className="py-2.5 px-3 font-mono text-neutral-500">{p.invoiceNumber || '-'}</td>
-                      <td className="py-2.5 px-3 text-center font-mono tabular-nums">{p.items.length}</td>
+                      <td className="py-2.5 px-3 text-neutral-500 font-mono tabular-nums">
+                        {formatDate(p.date)}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-neutral-500">
+                        {p.invoiceNumber || '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-center font-mono tabular-nums">
+                        {p.items.length}
+                      </td>
                       <td className="py-2.5 px-3 text-end font-mono font-bold text-neutral-800 dark:text-neutral-200 tabular-nums">
                         {formatCurrency(p.totalAmount)}
                       </td>
                       <td className="py-2.5 px-3 text-center">
-                        <span className="text-[11px] font-semibold text-emerald-600">
-                          {p.paymentStatus}
+                        <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          {getPaymentStatusLabel(p.paymentStatus)}
                         </span>
                       </td>
                     </tr>

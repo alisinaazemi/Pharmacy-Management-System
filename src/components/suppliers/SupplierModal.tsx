@@ -11,6 +11,8 @@ interface SupplierModalProps {
   supplierToEdit?: Supplier | null;
 }
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export const SupplierModal: React.FC<SupplierModalProps> = ({
   isOpen,
   onClose,
@@ -60,17 +62,37 @@ export const SupplierModal: React.FC<SupplierModalProps> = ({
     const err: Record<string, string> = {};
     if (!formData.companyName.trim()) err.companyName = t('validation.requiredField');
     if (!formData.name.trim()) err.name = t('validation.requiredField');
-    if (!formData.phone.trim()) err.phone = t('validation.requiredField');
+
+    const phoneDigits = formData.phone.replace(/\D/g, '');
+    if (!formData.phone.trim()) {
+      err.phone = t('validation.requiredField');
+    } else if (phoneDigits.length < 7) {
+      err.phone = t('validation.invalidPhone');
+    }
+
+    if (formData.email.trim() && !EMAIL_REGEX.test(formData.email.trim())) {
+      err.email = t('validation.invalidEmail');
+    }
 
     if (Object.keys(err).length > 0) {
       setErrors(err);
       return;
     }
 
+    const payload = {
+      ...formData,
+      name: formData.name.trim(),
+      companyName: formData.companyName.trim(),
+      phone: formData.phone.trim(),
+      email: formData.email.trim(),
+      address: formData.address.trim(),
+      description: formData.description.trim(),
+    };
+
     if (supplierToEdit) {
-      updateSupplier(supplierToEdit.id, formData);
+      updateSupplier(supplierToEdit.id, payload);
     } else {
-      addSupplier(formData);
+      addSupplier(payload);
     }
     onClose();
   };
@@ -80,22 +102,22 @@ export const SupplierModal: React.FC<SupplierModalProps> = ({
       isOpen={isOpen}
       onClose={onClose}
       title={supplierToEdit ? t('suppliers.editSupplier') : t('suppliers.addSupplier')}
-      subtitle="Authorized distributor profile compliant with SRS FR-21"
+      subtitle={t('suppliers.modalSubtitle')}
       maxWidth="lg"
     >
-      <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+      <form onSubmit={handleSubmit} className="space-y-4 text-xs" noValidate>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
-            label={t('suppliers.companyName')}
-            placeholder="e.g. Kabul Pharma Distributors Ltd."
+            label={`${t('suppliers.companyName')} *`}
+            placeholder={t('suppliers.companyPlaceholder')}
             value={formData.companyName}
             onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
             error={errors.companyName}
             required
           />
           <Input
-            label={t('suppliers.name')}
-            placeholder="e.g. Dr. Ahmad Wahidi"
+            label={`${t('suppliers.name')} *`}
+            placeholder={t('suppliers.namePlaceholder')}
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             error={errors.name}
@@ -105,7 +127,7 @@ export const SupplierModal: React.FC<SupplierModalProps> = ({
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Input
-            label={t('suppliers.phone')}
+            label={`${t('suppliers.phone')} *`}
             placeholder="+93 70 123 4567"
             value={formData.phone}
             onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
@@ -118,12 +140,13 @@ export const SupplierModal: React.FC<SupplierModalProps> = ({
             placeholder="orders@supplier.com"
             value={formData.email}
             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+            error={errors.email}
           />
         </div>
 
         <Input
           label={t('suppliers.address')}
-          placeholder="Commercial avenue, District, City"
+          placeholder={t('suppliers.addressPlaceholder')}
           value={formData.address}
           onChange={(e) => setFormData({ ...formData, address: e.target.value })}
         />
@@ -137,7 +160,7 @@ export const SupplierModal: React.FC<SupplierModalProps> = ({
             className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-xs px-3 py-2 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
             value={formData.description}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-            placeholder="Supply catalog categories, delivery agreements, credit terms..."
+            placeholder={t('suppliers.descriptionPlaceholder')}
           />
         </div>
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { Input, Select } from '../common/Input';
@@ -14,28 +14,48 @@ interface NewPurchaseModalProps {
 export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onClose }) => {
   const { suppliers, medicines, recordPurchase, currentUser, formatCurrency, t } = useApp();
 
-  const [supplierId, setSupplierId] = useState(suppliers[0]?.id || '');
-  const [invoiceNumber, setInvoiceNumber] = useState(`INV-SUP-${Math.floor(1000 + Math.random() * 9000)}`);
+  const activeSuppliers = useMemo(() => suppliers.filter((s) => s.isActive), [suppliers]);
+  const activeMedicines = useMemo(() => medicines.filter((m) => m.isActive), [medicines]);
+
+  const buildDefaultItem = (): PurchaseItem => {
+    const firstMed = activeMedicines[0];
+    return {
+      medicineId: firstMed?.id || '',
+      medicineName: firstMed?.name || '',
+      batchNumber: `BTH-${Math.floor(1000 + Math.random() * 9000)}`,
+      expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .split('T')[0],
+      quantity: 50,
+      unitPurchasePrice: firstMed?.purchasePrice || 50,
+      totalCost: (firstMed?.purchasePrice || 50) * 50,
+    };
+  };
+
+  const [supplierId, setSupplierId] = useState(activeSuppliers[0]?.id || '');
+  const [invoiceNumber, setInvoiceNumber] = useState(
+    `INV-SUP-${Math.floor(1000 + Math.random() * 9000)}`
+  );
   const [purchaseDate, setPurchaseDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentStatus, setPaymentStatus] = useState<'Paid' | 'Pending' | 'Partial'>('Paid');
   const [notes, setNotes] = useState('');
-
-  const [items, setItems] = useState<PurchaseItem[]>([
-    {
-      medicineId: medicines[0]?.id || '',
-      medicineName: medicines[0]?.name || '',
-      batchNumber: `BTH-${Math.floor(1000 + Math.random() * 9000)}`,
-      expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      quantity: 50,
-      unitPurchasePrice: medicines[0]?.purchasePrice || 50,
-      totalCost: (medicines[0]?.purchasePrice || 50) * 50,
-    },
-  ]);
-
+  const [items, setItems] = useState<PurchaseItem[]>([buildDefaultItem()]);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    if (!isOpen) return;
+    setSupplierId(activeSuppliers[0]?.id || '');
+    setInvoiceNumber(`INV-SUP-${Math.floor(1000 + Math.random() * 9000)}`);
+    setPurchaseDate(new Date().toISOString().split('T')[0]);
+    setPaymentStatus('Paid');
+    setNotes('');
+    setItems([buildDefaultItem()]);
+    setError('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
   const handleMedicineChange = (index: number, newMedId: string) => {
-    const med = medicines.find((m) => m.id === newMedId);
+    const med = activeMedicines.find((m) => m.id === newMedId);
     if (!med) return;
 
     const updated = [...items];
@@ -49,9 +69,13 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
     setItems(updated);
   };
 
-  const handleItemFieldChange = (index: number, field: keyof PurchaseItem, val: any) => {
+  const handleItemFieldChange = (
+    index: number,
+    field: keyof PurchaseItem,
+    val: string | number
+  ) => {
     const updated = [...items];
-    (updated[index] as any)[field] = val;
+    updated[index] = { ...updated[index], [field]: val };
     if (field === 'quantity' || field === 'unitPurchasePrice') {
       updated[index].totalCost = updated[index].quantity * updated[index].unitPurchasePrice;
     }
@@ -59,14 +83,16 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
   };
 
   const addItemRow = () => {
-    const defaultMed = medicines[0];
+    const defaultMed = activeMedicines[0];
     setItems([
       ...items,
       {
         medicineId: defaultMed?.id || '',
         medicineName: defaultMed?.name || '',
         batchNumber: `BTH-${Math.floor(1000 + Math.random() * 9000)}`,
-        expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        expirationDate: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split('T')[0],
         quantity: 20,
         unitPurchasePrice: defaultMed?.purchasePrice || 50,
         totalCost: (defaultMed?.purchasePrice || 50) * 20,
@@ -85,14 +111,29 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
     e.preventDefault();
     setError('');
 
-    const sup = suppliers.find((s) => s.id === supplierId);
+    const sup = activeSuppliers.find((s) => s.id === supplierId);
     if (!sup) {
-      setError('Please select a valid supplier.');
+      setError(t('purchases.invalidSupplierError'));
       return;
     }
 
-    if (items.length === 0 || items.some((i) => i.quantity <= 0)) {
-      setError('All items must have a quantity greater than 0.');
+    if (!invoiceNumber.trim() || !purchaseDate) {
+      setError(t('validation.requiredField'));
+      return;
+    }
+
+    if (
+      items.length === 0 ||
+      items.some(
+        (i) =>
+          !i.medicineId ||
+          !i.batchNumber.trim() ||
+          !i.expirationDate ||
+          i.quantity <= 0 ||
+          i.unitPurchasePrice < 0
+      )
+    ) {
+      setError(t('purchases.invalidQtyError'));
       return;
     }
 
@@ -101,10 +142,10 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
       supplierName: sup.name,
       companyName: sup.companyName,
       date: purchaseDate,
-      invoiceNumber,
+      invoiceNumber: invoiceNumber.trim(),
       paymentStatus,
       receivedBy: currentUser.name,
-      notes,
+      notes: notes.trim() || undefined,
       items,
       totalAmount,
     });
@@ -117,10 +158,10 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
       isOpen={isOpen}
       onClose={onClose}
       title={t('purchases.newPurchaseModalTitle')}
-      subtitle="Stock is automatically updated in inventory upon saving (FR-19)"
+      subtitle={t('purchases.newPurchaseModalSubtitle')}
       maxWidth="4xl"
     >
-      <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+      <form onSubmit={handleSubmit} className="space-y-4 text-xs" noValidate>
         {/* Header fields */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           <div className="sm:col-span-2">
@@ -128,7 +169,7 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
               label={t('purchases.supplier')}
               value={supplierId}
               onChange={(e) => setSupplierId(e.target.value)}
-              options={suppliers.map((s) => ({
+              options={activeSuppliers.map((s) => ({
                 value: s.id,
                 label: `${s.companyName} (${s.name})`,
               }))}
@@ -183,14 +224,14 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
               </thead>
               <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
                 {items.map((item, idx) => (
-                  <tr key={idx} className="hover:bg-neutral-50/50">
+                  <tr key={idx} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/30">
                     <td className="py-2 px-3 min-w-[200px]">
                       <select
                         value={item.medicineId}
                         onChange={(e) => handleMedicineChange(idx, e.target.value)}
-                        className="w-full text-xs p-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900"
+                        className="w-full text-xs p-1.5 rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
                       >
-                        {medicines.map((m) => (
+                        {activeMedicines.map((m) => (
                           <option key={m.id} value={m.id}>
                             {m.name}
                           </option>
@@ -202,7 +243,7 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
                         type="text"
                         value={item.batchNumber}
                         onChange={(e) => handleItemFieldChange(idx, 'batchNumber', e.target.value)}
-                        className="w-full text-xs p-1.5 font-mono rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900"
+                        className="w-full text-xs p-1.5 font-mono rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
                         required
                       />
                     </td>
@@ -210,8 +251,10 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
                       <input
                         type="date"
                         value={item.expirationDate}
-                        onChange={(e) => handleItemFieldChange(idx, 'expirationDate', e.target.value)}
-                        className="w-full text-xs p-1.5 font-mono rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900"
+                        onChange={(e) =>
+                          handleItemFieldChange(idx, 'expirationDate', e.target.value)
+                        }
+                        className="w-full text-xs p-1.5 font-mono rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
                         required
                       />
                     </td>
@@ -221,9 +264,9 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
                         min="1"
                         value={item.quantity}
                         onChange={(e) =>
-                          handleItemFieldChange(idx, 'quantity', parseInt(e.target.value, 10) || 1)
+                          handleItemFieldChange(idx, 'quantity', parseInt(e.target.value, 10) || 0)
                         }
-                        className="w-full text-center text-xs p-1.5 font-mono font-bold rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900"
+                        className="w-full text-center text-xs p-1.5 font-mono font-bold rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
                         required
                       />
                     </td>
@@ -240,7 +283,7 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
                             parseFloat(e.target.value) || 0
                           )
                         }
-                        className="w-full text-end text-xs p-1.5 font-mono rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900"
+                        className="w-full text-end text-xs p-1.5 font-mono rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
                         required
                       />
                     </td>
@@ -265,13 +308,27 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
           </div>
         </div>
 
-        {/* Payment and Notes */}
+        {/* Notes */}
+        <div>
+          <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
+            {t('purchases.notes')}
+          </label>
+          <textarea
+            rows={2}
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder={t('purchases.notesPlaceholder')}
+            className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-xs px-3 py-2 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+          />
+        </div>
+
+        {/* Payment and Total */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
           <div>
             <Select
               label={t('purchases.paymentStatus')}
               value={paymentStatus}
-              onChange={(e) => setPaymentStatus(e.target.value as any)}
+              onChange={(e) => setPaymentStatus(e.target.value as 'Paid' | 'Pending' | 'Partial')}
               options={[
                 { value: 'Paid', label: t('statusLabels.paid') },
                 { value: 'Pending', label: t('statusLabels.pending') },
@@ -288,7 +345,7 @@ export const NewPurchaseModal: React.FC<NewPurchaseModalProps> = ({ isOpen, onCl
           </div>
         </div>
 
-        {error && <p className="text-rose-600 font-semibold">{error}</p>}
+        {error && <p className="text-rose-600 dark:text-rose-400 font-semibold">{error}</p>}
 
         {/* Buttons */}
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-200 dark:border-neutral-800">

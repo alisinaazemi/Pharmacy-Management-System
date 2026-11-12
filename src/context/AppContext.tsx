@@ -1,15 +1,7 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import {
-  initialCategories,
-  initialInventoryTransactions,
-  initialMedicines,
-  initialPurchases,
-  initialSales,
-  initialSettings,
-  initialSuppliers,
-  initialUsers,
-} from '../data/mockData';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { translations } from '../locales/translations';
+import { LOGIN_PATH, pathToView, viewToPath } from '../routes/routes';
+import { pmsService } from '../services/pmsService';
 import {
   ActiveView,
   Category,
@@ -28,6 +20,11 @@ import {
   User,
 } from '../types';
 
+interface LoginResult {
+  success: boolean;
+  error?: string;
+}
+
 interface AppContextType {
   // Localization & Theme
   language: Language;
@@ -37,7 +34,12 @@ interface AppContextType {
   isDark: boolean;
   t: (path: string, params?: Record<string, string | number>) => string;
   formatCurrency: (amount: number) => string;
-  formatDate: (dateStr: string) => string;
+  formatDate: (dateStr: string, includeTime?: boolean) => string;
+  getRoleLabel: (role: Role) => string;
+  getCategoryName: (categoryId: string, fallback?: string) => string;
+  getPaymentMethodLabel: (method: 'Cash' | 'Card' | 'Online') => string;
+  getPaymentStatusLabel: (status: 'Paid' | 'Pending' | 'Partial') => string;
+  getChangeTypeLabel: (type: InventoryChangeType) => string;
 
   // View Navigation & RBAC
   activeView: ActiveView;
@@ -48,7 +50,7 @@ interface AppContextType {
   switchRole: (role: Role) => void;
   hasPermission: (view: ActiveView) => boolean;
   isLoggedIn: boolean;
-  login: (username: string) => boolean;
+  login: (username: string, password: string) => LoginResult;
   logout: () => void;
 
   // Data Entities
@@ -62,16 +64,18 @@ interface AppContextType {
   settings: SystemSettings;
 
   // Entity Actions
-  addMedicine: (data: Omit<Medicine, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  addMedicine: (data: Omit<Medicine, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => void;
   updateMedicine: (id: string, data: Partial<Medicine>) => void;
   toggleMedicineActive: (id: string) => void;
-  
+
   addCategory: (data: Omit<Category, 'id'>) => void;
   updateCategory: (id: string, data: Partial<Category>) => void;
-  
+  toggleCategoryActive: (id: string) => void;
+
   addSupplier: (data: Omit<Supplier, 'id' | 'createdAt'>) => void;
   updateSupplier: (id: string, data: Partial<Supplier>) => void;
-  
+  toggleSupplierActive: (id: string) => void;
+
   processSale: (data: {
     items: SaleItem[];
     customerName?: string;
@@ -80,12 +84,12 @@ interface AppContextType {
     paymentMethod: 'Cash' | 'Card' | 'Online';
     notes?: string;
   }) => { success: boolean; sale?: Sale; error?: string };
-  
+
   recordPurchase: (data: Omit<Purchase, 'id'>) => void;
   adjustStock: (medicineId: string, delta: number, type: InventoryChangeType, reason: string) => void;
-  
-  addUser: (data: Omit<User, 'id' | 'createdAt'>) => void;
-  updateUser: (id: string, data: Partial<User>) => void;
+
+  addUser: (data: Omit<User, 'id' | 'createdAt'> & { password?: string }) => void;
+  updateUser: (id: string, data: Partial<User> & { password?: string }) => void;
   updateSettings: (newSettings: Partial<SystemSettings>) => void;
   resetAllData: () => void;
 
@@ -103,24 +107,20 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // 1. Language state (Persist in localStorage)
-  const [language, setLanguageState] = useState<Language>(() => {
-    const saved = localStorage.getItem('pms_language');
-    return (saved === 'fa' || saved === 'en') ? saved : 'en';
-  });
+  const initialSnapshot = pmsService.loadInitialState();
+  const initialSession = pmsService.getSession();
+  const initialRoute = pathToView(window.location.pathname);
 
-  // 2. Theme state (Persist in localStorage)
-  const [theme, setThemeState] = useState<Theme>(() => {
-    const saved = localStorage.getItem('pms_theme');
-    return (saved === 'light' || saved === 'dark' || saved === 'system') ? (saved as Theme) : 'light';
-  });
+  // 1. Language state
+  const [language, setLanguageState] = useState<Language>(() => pmsService.getLanguage());
 
+  // 2. Theme state (defaults to 'system')
+  const [theme, setThemeState] = useState<Theme>(() => pmsService.getTheme());
   const [isDark, setIsDark] = useState<boolean>(false);
 
-  // Sync language with document direction & lang attribute
   const setLanguage = (lang: Language) => {
     setLanguageState(lang);
-    localStorage.setItem('pms_language', lang);
+    pmsService.saveLanguage(lang);
   };
 
   useEffect(() => {
@@ -128,20 +128,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     document.documentElement.dir = language === 'fa' ? 'rtl' : 'ltr';
   }, [language]);
 
-  // Sync theme with document classList
   const setTheme = (newTheme: Theme) => {
     setThemeState(newTheme);
-    localStorage.setItem('pms_theme', newTheme);
+    pmsService.saveTheme(newTheme);
   };
 
   useEffect(() => {
     const applyTheme = () => {
-      let dark = false;
-      if (theme === 'system') {
-        dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      } else {
-        dark = theme === 'dark';
-      }
+      const dark =
+        theme === 'system'
+          ? window.matchMedia('(prefers-color-scheme: dark)').matches
+          : theme === 'dark';
       setIsDark(dark);
       if (dark) {
         document.documentElement.classList.add('dark');
@@ -161,64 +158,226 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [theme]);
 
   // Translation resolver helper
-  const t = (path: string, params?: Record<string, string | number>): string => {
-    const keys = path.split('.');
-    let current: any = translations[language];
-    for (const key of keys) {
-      if (current && typeof current === 'object' && key in current) {
-        current = current[key];
-      } else {
-        // Fallback to English if translation is missing
-        let fallback: any = translations.en;
-        for (const fbKey of keys) {
-          if (fallback && typeof fallback === 'object' && fbKey in fallback) {
-            fallback = fallback[fbKey];
-          } else {
-            return path;
+  const t = useCallback(
+    (path: string, params?: Record<string, string | number>): string => {
+      const keys = path.split('.');
+      let current: unknown = translations[language];
+      for (const key of keys) {
+        if (current && typeof current === 'object' && key in current) {
+          current = (current as Record<string, unknown>)[key];
+        } else {
+          let fallback: unknown = translations.en;
+          for (const fbKey of keys) {
+            if (fallback && typeof fallback === 'object' && fbKey in fallback) {
+              fallback = (fallback as Record<string, unknown>)[fbKey];
+            } else {
+              return path;
+            }
           }
+          current = fallback;
+          break;
         }
-        current = fallback;
-        break;
       }
-    }
-    if (typeof current !== 'string') return path;
-    if (params) {
-      let result = current;
-      for (const [key, val] of Object.entries(params)) {
-        result = result.replace(new RegExp(`{${key}}`, 'g'), String(val));
+      if (typeof current !== 'string') return path;
+      if (params) {
+        let result = current;
+        for (const [key, val] of Object.entries(params)) {
+          result = result.replace(new RegExp(`{${key}}`, 'g'), String(val));
+        }
+        return result;
       }
-      return result;
-    }
-    return current;
-  };
+      return current;
+    },
+    [language]
+  );
 
-  // 3. Navigation & RBAC
-  const [activeView, setActiveView] = useState<ActiveView>('dashboard');
-  const [users, setUsers] = useState<User[]>(() => {
-    const saved = localStorage.getItem('pms_users');
-    return saved ? JSON.parse(saved) : initialUsers;
+  // 3. Data & Auth State
+  const [users, setUsers] = useState<User[]>(initialSnapshot.users);
+  const [medicines, setMedicines] = useState<Medicine[]>(initialSnapshot.medicines);
+  const [categories, setCategories] = useState<Category[]>(initialSnapshot.categories);
+  const [suppliers, setSuppliers] = useState<Supplier[]>(initialSnapshot.suppliers);
+  const [sales, setSales] = useState<Sale[]>(initialSnapshot.sales);
+  const [purchases, setPurchases] = useState<Purchase[]>(initialSnapshot.purchases);
+  const [inventoryTransactions, setInventoryTransactions] = useState<InventoryTransaction[]>(
+    initialSnapshot.inventoryTransactions
+  );
+  const [settings, setSettings] = useState<SystemSettings>(initialSnapshot.settings);
+
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    if (initialRoute.isLogin) return false;
+    return initialSession.isLoggedIn;
   });
-  const [currentUser, setCurrentUser] = useState<User>(users[0]); // Bahram Jafaree by default
-  const [currentRole, setCurrentRole] = useState<Role>(users[0].role);
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(true);
 
-  // Switch role simulator (lets user test views as Admin, Manager, or Cashier)
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    const matched = initialSession.userId
+      ? initialSnapshot.users.find((u) => u.id === initialSession.userId && u.isActive)
+      : null;
+    return matched || initialSnapshot.users[0];
+  });
+
+  const [currentRole, setCurrentRole] = useState<Role>(() => {
+    return initialSession.role || currentUser.role;
+  });
+
+  const [activeView, setActiveViewState] = useState<ActiveView>(() => initialRoute.view);
+
+  // Sync URL with view & auth state
+  const setActiveView = useCallback((view: ActiveView) => {
+    setActiveViewState(view);
+    const targetPath = viewToPath(view);
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({ view }, '', targetPath);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn) {
+      if (window.location.pathname !== LOGIN_PATH) {
+        window.history.replaceState({ isLogin: true }, '', LOGIN_PATH);
+      }
+    } else if (window.location.pathname === '/' || window.location.pathname === LOGIN_PATH) {
+      window.history.replaceState({ view: activeView }, '', viewToPath(activeView));
+    }
+  }, [isLoggedIn, activeView]);
+
+  useEffect(() => {
+    const onPopState = () => {
+      const parsed = pathToView(window.location.pathname);
+      if (parsed.isLogin) {
+        setIsLoggedIn(false);
+      } else {
+        setActiveViewState(parsed.view);
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  // Persist domain entities via pmsService
+  useEffect(() => {
+    pmsService.saveMedicines(medicines);
+  }, [medicines]);
+
+  useEffect(() => {
+    pmsService.saveCategories(categories);
+  }, [categories]);
+
+  useEffect(() => {
+    pmsService.saveSuppliers(suppliers);
+  }, [suppliers]);
+
+  useEffect(() => {
+    pmsService.saveSales(sales);
+  }, [sales]);
+
+  useEffect(() => {
+    pmsService.savePurchases(purchases);
+  }, [purchases]);
+
+  useEffect(() => {
+    pmsService.saveInventoryTransactions(inventoryTransactions);
+  }, [inventoryTransactions]);
+
+  useEffect(() => {
+    pmsService.saveUsers(users);
+  }, [users]);
+
+  useEffect(() => {
+    pmsService.saveSettings(settings);
+  }, [settings]);
+
+  // Notifications
+  const [notifications, setNotifications] = useState<ToastNotification[]>([]);
+
+  const removeToast = useCallback((id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
+  const addToast = useCallback(
+    (type: ToastNotification['type'], title: string, message: string) => {
+      const id = Date.now().toString() + Math.random().toString(36).substring(2, 5);
+      setNotifications((prev) => [...prev, { id, type, title, message }]);
+      setTimeout(() => {
+        removeToast(id);
+      }, 4500);
+    },
+    [removeToast]
+  );
+
+  // Localization helper functions
+  const getRoleLabel = useCallback(
+    (role: Role): string => {
+      if (role === 'Admin') return t('roles.adminBadge');
+      if (role === 'Manager') return t('roles.managerBadge');
+      return t('roles.cashierBadge');
+    },
+    [t]
+  );
+
+  const getCategoryName = useCallback(
+    (categoryId: string, fallback?: string): string => {
+      const cat = categories.find((c) => c.id === categoryId);
+      if (!cat) return fallback || '-';
+      return language === 'fa' ? cat.nameFa || cat.name : cat.name;
+    },
+    [categories, language]
+  );
+
+  const getPaymentMethodLabel = useCallback(
+    (method: 'Cash' | 'Card' | 'Online'): string => {
+      if (method === 'Cash') return t('pos.cash');
+      if (method === 'Card') return t('pos.card');
+      return t('pos.online');
+    },
+    [t]
+  );
+
+  const getPaymentStatusLabel = useCallback(
+    (status: 'Paid' | 'Pending' | 'Partial'): string => {
+      if (status === 'Paid') return t('statusLabels.paid');
+      if (status === 'Pending') return t('statusLabels.pending');
+      return t('statusLabels.partial');
+    },
+    [t]
+  );
+
+  const getChangeTypeLabel = useCallback(
+    (type: InventoryChangeType): string => {
+      switch (type) {
+        case 'Sale':
+          return t('inventory.types.sale');
+        case 'Purchase':
+          return t('inventory.types.purchase');
+        case 'Expired Write-off':
+          return t('inventory.types.expired');
+        case 'Damaged Write-off':
+          return t('inventory.types.damaged');
+        default:
+          return t('inventory.types.adjustment');
+      }
+    },
+    [t]
+  );
+
+  // Role & Auth Helpers
   const switchRole = (newRole: Role) => {
     setCurrentRole(newRole);
-    // Switch to a matched user profile or update current user role
     const matchedUser = users.find((u) => u.role === newRole && u.isActive) || {
       ...currentUser,
       role: newRole,
     };
     setCurrentUser(matchedUser);
+    pmsService.saveSession(true, matchedUser.id, newRole);
 
-    // If on a restricted page, route back to an accessible view
-    if (newRole === 'Cashier' && ['users', 'settings', 'inventory', 'purchases', 'suppliers', 'categories'].includes(activeView)) {
+    if (
+      newRole === 'Cashier' &&
+      ['users', 'settings', 'inventory', 'purchases', 'suppliers', 'categories'].includes(activeView)
+    ) {
       setActiveView('pos');
     } else if (newRole === 'Manager' && ['users', 'settings'].includes(activeView)) {
       setActiveView('dashboard');
     }
-    addToast('info', t('roles.switchRolePrompt'), `${t('roles.currentRole')}: ${newRole}`);
+    addToast('info', t('roles.switchRolePrompt'), `${t('roles.currentRole')}: ${getRoleLabel(newRole)}`);
   };
 
   const hasPermission = (view: ActiveView): boolean => {
@@ -232,136 +391,106 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   };
 
-  const login = (username: string) => {
-    const user = users.find((u) => u.username.toLowerCase() === username.toLowerCase() || u.email.toLowerCase() === username.toLowerCase());
-    if (user && user.isActive) {
-      setCurrentUser(user);
-      setCurrentRole(user.role);
-      setIsLoggedIn(true);
-      addToast('success', t('header.login'), `${user.name} (${user.role})`);
-      return true;
+  const login = (username: string, password: string): LoginResult => {
+    const query = username.trim().toLowerCase();
+    const user = users.find(
+      (u) => u.username.toLowerCase() === query || u.email.toLowerCase() === query
+    );
+    if (!user) {
+      return { success: false, error: t('validation.invalidLogin') };
     }
-    return false;
+    if (!user.isActive) {
+      return { success: false, error: t('auth.accountInactive') };
+    }
+    const creds = pmsService.getCredentials();
+    const expected = creds[user.username.toLowerCase()] || 'password123';
+    if (password !== expected) {
+      return { success: false, error: t('validation.invalidLogin') };
+    }
+
+    const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
+    const updatedUser = { ...user, lastLogin: nowStr };
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? updatedUser : u)));
+    setCurrentUser(updatedUser);
+    setCurrentRole(user.role);
+    setIsLoggedIn(true);
+    pmsService.saveSession(true, user.id, user.role);
+    setActiveView(user.role === 'Cashier' ? 'pos' : 'dashboard');
+    addToast('success', t('header.login'), `${user.name} (${getRoleLabel(user.role)})`);
+    return { success: true };
   };
 
   const logout = () => {
     setIsLoggedIn(false);
-  };
-
-  // 4. Data states with localStorage persistence
-  const [medicines, setMedicines] = useState<Medicine[]>(() => {
-    const saved = localStorage.getItem('pms_medicines');
-    return saved ? JSON.parse(saved) : initialMedicines;
-  });
-
-  const [categories, setCategories] = useState<Category[]>(() => {
-    const saved = localStorage.getItem('pms_categories');
-    return saved ? JSON.parse(saved) : initialCategories;
-  });
-
-  const [suppliers, setSuppliers] = useState<Supplier[]>(() => {
-    const saved = localStorage.getItem('pms_suppliers');
-    return saved ? JSON.parse(saved) : initialSuppliers;
-  });
-
-  const [sales, setSales] = useState<Sale[]>(() => {
-    const saved = localStorage.getItem('pms_sales');
-    return saved ? JSON.parse(saved) : initialSales;
-  });
-
-  const [purchases, setPurchases] = useState<Purchase[]>(() => {
-    const saved = localStorage.getItem('pms_purchases');
-    return saved ? JSON.parse(saved) : initialPurchases;
-  });
-
-  const [inventoryTransactions, setInventoryTransactions] = useState<InventoryTransaction[]>(() => {
-    const saved = localStorage.getItem('pms_inventory_tx');
-    return saved ? JSON.parse(saved) : initialInventoryTransactions;
-  });
-
-  const [settings, setSettings] = useState<SystemSettings>(() => {
-    const saved = localStorage.getItem('pms_settings');
-    return saved ? JSON.parse(saved) : initialSettings;
-  });
-
-  // Save to localStorage whenever state changes
-  useEffect(() => {
-    localStorage.setItem('pms_medicines', JSON.stringify(medicines));
-  }, [medicines]);
-
-  useEffect(() => {
-    localStorage.setItem('pms_categories', JSON.stringify(categories));
-  }, [categories]);
-
-  useEffect(() => {
-    localStorage.setItem('pms_suppliers', JSON.stringify(suppliers));
-  }, [suppliers]);
-
-  useEffect(() => {
-    localStorage.setItem('pms_sales', JSON.stringify(sales));
-  }, [sales]);
-
-  useEffect(() => {
-    localStorage.setItem('pms_purchases', JSON.stringify(purchases));
-  }, [purchases]);
-
-  useEffect(() => {
-    localStorage.setItem('pms_inventory_tx', JSON.stringify(inventoryTransactions));
-  }, [inventoryTransactions]);
-
-  useEffect(() => {
-    localStorage.setItem('pms_users', JSON.stringify(users));
-  }, [users]);
-
-  useEffect(() => {
-    localStorage.setItem('pms_settings', JSON.stringify(settings));
-  }, [settings]);
-
-  // Notifications
-  const [notifications, setNotifications] = useState<ToastNotification[]>([]);
-
-  const addToast = (type: ToastNotification['type'], title: string, message: string) => {
-    const id = Date.now().toString() + Math.random().toString(36).substring(2, 5);
-    setNotifications((prev) => [...prev, { id, type, title, message }]);
-    setTimeout(() => {
-      removeToast(id);
-    }, 4500);
-  };
-
-  const removeToast = (id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    pmsService.saveSession(false, null);
+    window.history.pushState({ isLogin: true }, '', LOGIN_PATH);
   };
 
   // Currency & Date formatting helpers
-  const formatCurrency = (amount: number): string => {
-    const formatted = Math.round(amount).toLocaleString();
-    if (settings.currency === 'AFN') {
-      return language === 'fa' ? `${formatted} افغانی` : `${formatted} AFN`;
-    }
-    return `$${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  };
+  const formatCurrency = useCallback(
+    (amount: number): string => {
+      const locale = language === 'fa' ? 'fa-AF' : 'en-US';
+      if (settings.currency === 'AFN') {
+        const formatted = Math.round(amount).toLocaleString(locale);
+        return language === 'fa' ? `${formatted} افغانی` : `${formatted} AFN`;
+      }
+      return `$${amount.toLocaleString(locale, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}`;
+    },
+    [language, settings.currency]
+  );
 
-  const formatDate = (dateStr: string): string => {
-    if (!dateStr) return '';
-    return dateStr;
-  };
+  const formatDate = useCallback(
+    (dateStr: string, includeTime = false): string => {
+      if (!dateStr) return t('common.never');
+      const normalized = dateStr.includes(' ') && !dateStr.includes('T')
+        ? dateStr.replace(' ', 'T')
+        : dateStr;
+      const parsed = new Date(normalized);
+      if (Number.isNaN(parsed.getTime())) return dateStr;
+
+      try {
+        if (language === 'fa') {
+          const opts: Intl.DateTimeFormatOptions = includeTime
+            ? { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }
+            : { year: 'numeric', month: '2-digit', day: '2-digit' };
+          return new Intl.DateTimeFormat('fa-IR-u-ca-persian', opts).format(parsed);
+        }
+        return dateStr;
+      } catch {
+        return dateStr;
+      }
+    },
+    [language, t]
+  );
 
   // Medicine Actions
-  const addMedicine = (data: Omit<Medicine, 'id' | 'createdAt' | 'updatedAt'>) => {
-    const newId = `MED-${String(medicines.length + 1).padStart(3, '0')}`;
+  const addMedicine = (data: Omit<Medicine, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }) => {
+    const customId = data.id?.trim().toUpperCase();
+    const newId =
+      customId ||
+      `MED-${String(
+        medicines.reduce((max, m) => {
+          const num = parseInt(m.id.replace(/\D/g, ''), 10);
+          return Number.isNaN(num) ? max : Math.max(max, num);
+        }, medicines.length) + 1
+      ).padStart(3, '0')}`;
+
     const now = new Date().toISOString().split('T')[0];
+    const { id: _ignored, ...rest } = data;
     const newMed: Medicine = {
-      ...data,
+      ...rest,
       id: newId,
       createdAt: now,
       updatedAt: now,
     };
     setMedicines((prev) => [newMed, ...prev]);
 
-    // Record initial inventory transaction if quantity > 0
     if (data.quantity > 0) {
       const tx: InventoryTransaction = {
-        id: `TX-${Date.now().toString().slice(-4)}`,
+        id: `TX-${Date.now().toString().slice(-5)}`,
         dateTime: new Date().toISOString().replace('T', ' ').slice(0, 16),
         medicineId: newId,
         medicineName: data.name,
@@ -370,11 +499,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         newQuantity: data.quantity,
         changeType: 'Stock Adjustment',
         userResponsible: currentUser.name,
-        reason: 'Initial catalog stock registration',
+        reason: t('medicines.initialStockReason'),
       };
       setInventoryTransactions((prev) => [tx, ...prev]);
     }
-    addToast('success', t('medicines.createdSuccess'), data.name);
+    addToast('success', t('medicines.createdSuccess'), `${data.name} (${newId})`);
   };
 
   const updateMedicine = (id: string, data: Partial<Medicine>) => {
@@ -406,14 +535,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addCategory = (data: Omit<Category, 'id'>) => {
     const newId = `CAT-${String(categories.length + 1).padStart(2, '0')}`;
     setCategories((prev) => [...prev, { ...data, id: newId }]);
-    addToast('success', t('categories.saveSuccess'), data.name);
+    addToast('success', t('categories.saveSuccess'), language === 'fa' ? data.nameFa : data.name);
   };
 
   const updateCategory = (id: string, data: Partial<Category>) => {
-    setCategories((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, ...data } : c))
-    );
+    setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)));
     addToast('success', t('categories.saveSuccess'), id);
+  };
+
+  const toggleCategoryActive = (id: string) => {
+    setCategories((prev) =>
+      prev.map((c) => {
+        if (c.id === id) {
+          const nextState = !c.isActive;
+          addToast(
+            'info',
+            nextState ? t('categories.activateSuccess') : t('categories.deactivateSuccess'),
+            language === 'fa' ? c.nameFa || c.name : c.name
+          );
+          return { ...c, isActive: nextState };
+        }
+        return c;
+      })
+    );
   };
 
   // Supplier Actions
@@ -431,10 +575,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSupplier = (id: string, data: Partial<Supplier>) => {
-    setSuppliers((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, ...data } : s))
-    );
+    setSuppliers((prev) => prev.map((s) => (s.id === id ? { ...s, ...data } : s)));
     addToast('success', t('suppliers.saveSuccess'), id);
+  };
+
+  const toggleSupplierActive = (id: string) => {
+    setSuppliers((prev) =>
+      prev.map((s) => {
+        if (s.id === id) {
+          const nextState = !s.isActive;
+          addToast(
+            'info',
+            nextState ? t('suppliers.activateSuccess') : t('suppliers.deactivateSuccess'),
+            s.companyName
+          );
+          return { ...s, isActive: nextState };
+        }
+        return s;
+      })
+    );
   };
 
   // Sales Action (FR-14, FR-15, FR-16, FR-10)
@@ -446,11 +605,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     paymentMethod: 'Cash' | 'Card' | 'Online';
     notes?: string;
   }) => {
-    // 1. Stock Validation (FR-15): verify every item has sufficient available quantity
+    const nowDate = new Date();
     for (const item of data.items) {
       const med = medicines.find((m) => m.id === item.medicineId);
       if (!med) {
-        return { success: false, error: `Medicine ${item.medicineName} not found in catalog.` };
+        return { success: false, error: t('validation.requiredField') };
+      }
+      if (med.expirationDate && new Date(med.expirationDate) < nowDate) {
+        return {
+          success: false,
+          error: t('pos.expiredSaleBlocked', { name: med.name }),
+        };
       }
       if (med.quantity < item.quantity) {
         return {
@@ -460,7 +625,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 2. Compute Totals
     const subtotal = data.items.reduce((sum, item) => sum + item.totalPrice, 0);
     const tax = Math.round((subtotal * settings.taxRatePercent) / 100);
     const grandTotal = Math.max(0, subtotal - data.discount + tax);
@@ -472,7 +636,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       dateTime: nowStr,
       cashierId: currentUser.id,
       cashierName: currentUser.name,
-      customerName: data.customerName || (language === 'fa' ? 'مشتری آزاد' : 'Walk-in Customer'),
+      customerName: data.customerName || t('pos.walkInCustomer'),
       customerPhone: data.customerPhone,
       items: data.items,
       subtotal,
@@ -483,7 +647,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       notes: data.notes,
     };
 
-    // 3. Deduct Stock in Real-time (FR-10) and Generate Inventory History Records (FR-13)
     const newTransactions: InventoryTransaction[] = [];
     setMedicines((prev) =>
       prev.map((med) => {
@@ -501,7 +664,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             changeType: 'Sale',
             relatedTransactionId: saleId,
             userResponsible: currentUser.name,
-            reason: `Sold on Receipt #${saleId}`,
+            reason: t('inventory.saleReasonPrefix', { id: saleId }),
           });
           return { ...med, quantity: newQty };
         }
@@ -511,7 +674,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setSales((prev) => [newSale, ...prev]);
     setInventoryTransactions((prev) => [...newTransactions, ...prev]);
-    addToast('success', t('pos.saleSuccess'), `${saleId} - ${formatCurrency(grandTotal)}`);
+    addToast('success', t('pos.saleSuccess'), `${saleId} · ${formatCurrency(grandTotal)}`);
 
     return { success: true, sale: newSale };
   };
@@ -527,7 +690,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const nowStr = new Date().toISOString().replace('T', ' ').slice(0, 16);
     const newTransactions: InventoryTransaction[] = [];
 
-    // Increase stock automatically (FR-19)
     setMedicines((prev) =>
       prev.map((med) => {
         const item = data.items.find((i) => i.medicineId === med.id);
@@ -544,7 +706,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             changeType: 'Purchase',
             relatedTransactionId: purchaseId,
             userResponsible: currentUser.name,
-            reason: `Received on PO #${purchaseId}`,
+            reason: t('inventory.purchaseReasonPrefix', { id: purchaseId }),
           });
           return {
             ...med,
@@ -558,7 +720,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    // Update supplier stats
     setSuppliers((prev) =>
       prev.map((s) => {
         if (s.id === data.supplierId) {
@@ -607,21 +768,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // User Actions (FR-02)
-  const addUser = (data: Omit<User, 'id' | 'createdAt'>) => {
+  const addUser = (data: Omit<User, 'id' | 'createdAt'> & { password?: string }) => {
+    const { password, ...userFields } = data;
     const newId = `USR-${String(users.length + 1).padStart(3, '0')}`;
     const newUser: User = {
-      ...data,
+      ...userFields,
       id: newId,
       createdAt: new Date().toISOString().split('T')[0],
-      lastLogin: 'Never',
+      lastLogin: undefined,
     };
+    if (password) {
+      pmsService.setUserPassword(data.username, password);
+    }
     setUsers((prev) => [...prev, newUser]);
     addToast('success', t('users.saveSuccess'), data.name);
   };
 
-  const updateUser = (id: string, data: Partial<User>) => {
-    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...data } : u)));
-    addToast('success', t('users.saveSuccess'), id);
+  const updateUser = (id: string, data: Partial<User> & { password?: string }) => {
+    const { password, ...userFields } = data;
+    const target = users.find((u) => u.id === id);
+    if (password && (data.username || target?.username)) {
+      pmsService.setUserPassword(data.username || target!.username, password);
+    }
+    setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, ...userFields } : u)));
+    addToast('success', t('users.saveSuccess'), data.name || id);
   };
 
   // Settings Actions
@@ -631,28 +801,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetAllData = () => {
-    setMedicines(initialMedicines);
-    setCategories(initialCategories);
-    setSuppliers(initialSuppliers);
-    setSales(initialSales);
-    setPurchases(initialPurchases);
-    setInventoryTransactions(initialInventoryTransactions);
-    setUsers(initialUsers);
-    setSettings(initialSettings);
-    localStorage.clear();
-    addToast('info', 'Reset to demo', 'All initial demo datasets re-loaded.');
+    const fresh = pmsService.resetAllData();
+    setMedicines(fresh.medicines);
+    setCategories(fresh.categories);
+    setSuppliers(fresh.suppliers);
+    setSales(fresh.sales);
+    setPurchases(fresh.purchases);
+    setInventoryTransactions(fresh.inventoryTransactions);
+    setUsers(fresh.users);
+    setSettings(fresh.settings);
+    setCurrentUser(fresh.users[0]);
+    setCurrentRole(fresh.users[0].role);
+    pmsService.saveSession(true, fresh.users[0].id, fresh.users[0].role);
+    addToast('info', t('settings.resetSuccessTitle'), t('settings.resetSuccessMessage'));
   };
 
   // Derived Alerts (FR-11, FR-12)
   const today = new Date();
   const lowStockMedicines = medicines.filter((m) => m.isActive && m.quantity <= m.minStockLevel);
   const expiredMedicines = medicines.filter((m) => {
-    if (!m.expirationDate) return false;
-    const exp = new Date(m.expirationDate);
-    return exp < today;
+    if (!m.isActive || !m.expirationDate) return false;
+    return new Date(m.expirationDate) < today;
   });
   const nearExpiryMedicines = medicines.filter((m) => {
-    if (!m.expirationDate) return false;
+    if (!m.isActive || !m.expirationDate) return false;
     const exp = new Date(m.expirationDate);
     const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
     return diffDays >= 0 && diffDays <= 60;
@@ -669,6 +841,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         t,
         formatCurrency,
         formatDate,
+        getRoleLabel,
+        getCategoryName,
+        getPaymentMethodLabel,
+        getPaymentStatusLabel,
+        getChangeTypeLabel,
         activeView,
         setActiveView,
         currentUser,
@@ -692,8 +869,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleMedicineActive,
         addCategory,
         updateCategory,
+        toggleCategoryActive,
         addSupplier,
         updateSupplier,
+        toggleSupplierActive,
         processSale,
         recordPurchase,
         adjustStock,

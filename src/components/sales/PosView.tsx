@@ -9,14 +9,14 @@ import {
   Banknote,
   Smartphone,
   Printer,
-  CheckCircle2,
   AlertCircle,
-  Pill,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Medicine, Sale, SaleItem } from '../../types';
 import { Button } from '../common/Button';
 import { Input } from '../common/Input';
+import { ConfirmModal } from '../common/ConfirmModal';
+import { EmptyState } from '../common/EmptyState';
 import { ReceiptModal } from './ReceiptModal';
 
 export const PosView: React.FC = () => {
@@ -24,8 +24,8 @@ export const PosView: React.FC = () => {
     medicines,
     processSale,
     formatCurrency,
+    getCategoryName,
     settings,
-    currentUser,
     t,
   } = useApp();
 
@@ -38,26 +38,33 @@ export const PosView: React.FC = () => {
   const [notes, setNotes] = useState('');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [completedSale, setCompletedSale] = useState<Sale | null>(null);
+  const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
 
-  // Available medicines for searching in POS
+  const today = new Date();
+
   const searchableMedicines = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return medicines.filter((m) => m.isActive).slice(0, 8);
-    return medicines
-      .filter(
-        (m) =>
-          m.isActive &&
-          (m.name.toLowerCase().includes(q) ||
-            (m.genericName && m.genericName.toLowerCase().includes(q)) ||
-            m.batchNumber.toLowerCase().includes(q) ||
-            m.categoryName.toLowerCase().includes(q))
-      )
-      .slice(0, 10);
-  }, [medicines, searchQuery]);
+    const active = medicines.filter((m) => m.isActive);
+    if (!q) return active.slice(0, 12);
+    return active
+      .filter((m) => {
+        const catLabel = getCategoryName(m.categoryId, m.categoryName).toLowerCase();
+        return (
+          m.name.toLowerCase().includes(q) ||
+          (m.genericName && m.genericName.toLowerCase().includes(q)) ||
+          m.batchNumber.toLowerCase().includes(q) ||
+          catLabel.includes(q)
+        );
+      })
+      .slice(0, 12);
+  }, [medicines, searchQuery, getCategoryName]);
 
-  // Add to cart with stock validation (FR-15)
   const addToCart = (med: Medicine) => {
     setErrorMsg('');
+    if (med.expirationDate && new Date(med.expirationDate) < today) {
+      setErrorMsg(t('pos.expiredSaleBlocked', { name: med.name }));
+      return;
+    }
     if (med.quantity <= 0) {
       setErrorMsg(`${t('validation.insufficientStock', { qty: 0 })} (${med.name})`);
       return;
@@ -71,8 +78,11 @@ export const PosView: React.FC = () => {
         return;
       }
       const updated = [...cart];
-      updated[existingIndex].quantity += 1;
-      updated[existingIndex].totalPrice = updated[existingIndex].quantity * med.sellingPrice;
+      updated[existingIndex] = {
+        ...updated[existingIndex],
+        quantity: currentQty + 1,
+        totalPrice: (currentQty + 1) * med.sellingPrice,
+      };
       setCart(updated);
     } else {
       const newItem: SaleItem = {
@@ -98,7 +108,6 @@ export const PosView: React.FC = () => {
       return;
     }
 
-    // Stock validation (FR-15)
     if (newQty > med.quantity) {
       setErrorMsg(`${t('validation.insufficientStock', { qty: med.quantity })} (${med.name})`);
       return;
@@ -124,7 +133,6 @@ export const PosView: React.FC = () => {
     setNotes('');
   };
 
-  // Calculations
   const subtotal = cart.reduce((sum, item) => sum + item.totalPrice, 0);
   const tax = Math.round((subtotal * settings.taxRatePercent) / 100);
   const grandTotal = Math.max(0, subtotal - discount + tax);
@@ -134,7 +142,7 @@ export const PosView: React.FC = () => {
     setErrorMsg('');
 
     if (cart.length === 0) {
-      setErrorMsg('Cannot checkout with an empty cart.');
+      setErrorMsg(t('pos.emptyCartError'));
       return;
     }
 
@@ -171,9 +179,9 @@ export const PosView: React.FC = () => {
         </p>
       </div>
 
-      {/* Main Split Layout: Medicine Catalog Search (Left) + Current Order Cart (Right) */}
+      {/* Main Split Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Product Search & Quick Add Grid (7 Cols) */}
+        {/* Left Column: Search & Quick Add Grid */}
         <div className="lg:col-span-7 space-y-4">
           <div className="p-4 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl space-y-3">
             <div className="relative">
@@ -188,10 +196,11 @@ export const PosView: React.FC = () => {
               />
             </div>
 
-            <div className="flex items-center justify-between text-[11px] text-neutral-500">
-              <span>Quick Counter Prescriptions ({searchableMedicines.length} found)</span>
+            <div className="flex items-center justify-between text-[11px] text-neutral-500 dark:text-neutral-400">
+              <span>{t('pos.quickCatalogTitle', { count: searchableMedicines.length })}</span>
               {searchQuery && (
                 <button
+                  type="button"
                   onClick={() => setSearchQuery('')}
                   className="text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
                 >
@@ -201,74 +210,88 @@ export const PosView: React.FC = () => {
             </div>
           </div>
 
-          {/* Medicines Quick Select Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[600px] overflow-y-auto pe-1">
-            {searchableMedicines.map((med) => {
-              const isOut = med.quantity <= 0;
-              const isLow = med.quantity <= med.minStockLevel && med.quantity > 0;
-              const inCart = cart.find((i) => i.medicineId === med.id);
+          {searchableMedicines.length === 0 ? (
+            <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl">
+              <EmptyState
+                title={t('common.noResults')}
+                actionLabel={searchQuery ? t('common.clearFilters') : undefined}
+                onAction={() => setSearchQuery('')}
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[600px] overflow-y-auto pe-1">
+              {searchableMedicines.map((med) => {
+                const isOut = med.quantity <= 0;
+                const isExpired = Boolean(med.expirationDate && new Date(med.expirationDate) < today);
+                const isBlocked = isOut || isExpired;
+                const isLow = !isExpired && med.quantity <= med.minStockLevel && med.quantity > 0;
+                const inCart = cart.find((i) => i.medicineId === med.id);
 
-              return (
-                <div
-                  key={med.id}
-                  onClick={() => !isOut && addToCart(med)}
-                  className={`p-3.5 rounded-xl border transition-all flex flex-col justify-between ${
-                    isOut
-                      ? 'opacity-40 bg-neutral-100 dark:bg-neutral-800/40 border-neutral-200 dark:border-neutral-800 cursor-not-allowed'
-                      : inCart
-                      ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500/60 shadow-xs cursor-pointer hover:border-emerald-500'
-                      : 'bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 cursor-pointer shadow-2xs'
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-start justify-between gap-1">
-                      <h4 className="text-xs font-bold text-neutral-900 dark:text-neutral-100 leading-snug">
-                        {med.name}
-                      </h4>
-                      <span className="text-[10px] font-mono font-semibold text-neutral-400 shrink-0">
-                        {med.batchNumber}
-                      </span>
-                    </div>
-
-                    {med.genericName && (
-                      <p className="text-[11px] text-neutral-400 truncate mt-0.5">
-                        {med.genericName}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="mt-3 pt-2 border-t border-neutral-100 dark:border-neutral-800/60 flex items-center justify-between text-xs">
-                    <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
-                      {formatCurrency(med.sellingPrice)}
-                    </span>
-
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={`text-[10px] font-mono tabular-nums font-semibold ${
-                          isOut
-                            ? 'text-rose-600 dark:text-rose-400'
-                            : isLow
-                            ? 'text-amber-600 dark:text-amber-400'
-                            : 'text-neutral-500'
-                        }`}
-                      >
-                        {isOut ? t('statusLabels.outOfStock') : `${med.quantity} ${med.unit}`}
-                      </span>
-
-                      {!isOut && (
-                        <span className="p-1 rounded-md bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
-                          <Plus className="w-3 h-3" />
+                return (
+                  <button
+                    key={med.id}
+                    type="button"
+                    onClick={() => addToCart(med)}
+                    className={`text-start p-3.5 rounded-xl border transition-all flex flex-col justify-between ${
+                      isBlocked
+                        ? 'opacity-50 bg-neutral-100 dark:bg-neutral-800/40 border-neutral-200 dark:border-neutral-800 cursor-not-allowed'
+                        : inCart
+                        ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-500/60 shadow-xs cursor-pointer hover:border-emerald-500'
+                        : 'bg-white dark:bg-neutral-900 border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 cursor-pointer shadow-2xs'
+                    }`}
+                  >
+                    <div className="w-full">
+                      <div className="flex items-start justify-between gap-1">
+                        <h4 className="text-xs font-bold text-neutral-900 dark:text-neutral-100 leading-snug">
+                          {med.name}
+                        </h4>
+                        <span className="text-[10px] font-mono font-semibold text-neutral-400 shrink-0">
+                          {med.batchNumber}
                         </span>
-                      )}
+                      </div>
+
+                      <p className="text-[11px] text-neutral-400 truncate mt-0.5">
+                        {med.genericName || getCategoryName(med.categoryId, med.categoryName)}
+                      </p>
                     </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+
+                    <div className="w-full mt-3 pt-2 border-t border-neutral-100 dark:border-neutral-800/60 flex items-center justify-between text-xs">
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">
+                        {formatCurrency(med.sellingPrice)}
+                      </span>
+
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={`text-[10px] font-mono tabular-nums font-semibold ${
+                            isExpired || isOut
+                              ? 'text-rose-600 dark:text-rose-400'
+                              : isLow
+                              ? 'text-amber-600 dark:text-amber-400'
+                              : 'text-neutral-500 dark:text-neutral-400'
+                          }`}
+                        >
+                          {isExpired
+                            ? t('statusLabels.expired')
+                            : isOut
+                            ? t('statusLabels.outOfStock')
+                            : `${med.quantity} ${med.unit}`}
+                        </span>
+
+                        {!isBlocked && (
+                          <span className="p-1 rounded-md bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300">
+                            <Plus className="w-3 h-3" />
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
-        {/* Right Column: Checkout Cart & Order Calculation (5 Cols) */}
+        {/* Right Column: Checkout Cart */}
         <div className="lg:col-span-5 space-y-4">
           <form
             onSubmit={handleCheckout}
@@ -289,7 +312,7 @@ export const PosView: React.FC = () => {
               {cart.length > 0 && (
                 <button
                   type="button"
-                  onClick={clearCart}
+                  onClick={() => setIsClearConfirmOpen(true)}
                   className="text-xs text-neutral-400 hover:text-rose-600 cursor-pointer"
                 >
                   {t('pos.clearCart')}
@@ -297,7 +320,7 @@ export const PosView: React.FC = () => {
               )}
             </div>
 
-            {/* Error Message banner */}
+            {/* Error Banner */}
             {errorMsg && (
               <div className="p-2.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded-lg flex items-center gap-2 text-rose-700 dark:text-rose-300 text-xs font-semibold">
                 <AlertCircle className="w-4 h-4 shrink-0" />
@@ -319,7 +342,7 @@ export const PosView: React.FC = () => {
                         {item.medicineName}
                       </p>
                       <div className="text-[11px] text-neutral-400 tabular-nums">
-                        {formatCurrency(item.unitPrice)} each
+                        {formatCurrency(item.unitPrice)} / {t('common.each')}
                       </div>
                     </div>
 
@@ -362,22 +385,29 @@ export const PosView: React.FC = () => {
               )}
             </div>
 
-            {/* Customer Details Accordion / Section */}
-            <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 space-y-2">
+            {/* Customer Details & Notes */}
+            <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 space-y-2.5">
               <div className="grid grid-cols-2 gap-2">
                 <Input
                   label={t('pos.customerName')}
-                  placeholder="Optional"
+                  placeholder={t('common.optional')}
                   value={customerName}
                   onChange={(e) => setCustomerName(e.target.value)}
                 />
                 <Input
                   label={t('pos.customerPhone')}
-                  placeholder="Optional"
+                  placeholder={t('common.optional')}
                   value={customerPhone}
                   onChange={(e) => setCustomerPhone(e.target.value)}
                 />
               </div>
+
+              <Input
+                label={t('pos.notesLabel')}
+                placeholder={t('pos.notesPlaceholder')}
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
 
               {/* Payment Method Selector */}
               <div>
@@ -450,7 +480,9 @@ export const PosView: React.FC = () => {
 
               {settings.taxRatePercent > 0 && (
                 <div className="flex justify-between">
-                  <span>{t('pos.taxAmount')} ({settings.taxRatePercent}%):</span>
+                  <span>
+                    {t('pos.taxAmount')} ({settings.taxRatePercent}%):
+                  </span>
                   <span className="tabular-nums">+{formatCurrency(tax)}</span>
                 </div>
               )}
@@ -463,7 +495,6 @@ export const PosView: React.FC = () => {
               </div>
             </div>
 
-            {/* Complete Sale Button */}
             <Button
               type="submit"
               variant="primary"
@@ -477,6 +508,17 @@ export const PosView: React.FC = () => {
           </form>
         </div>
       </div>
+
+      {/* Clear Cart Confirmation */}
+      <ConfirmModal
+        isOpen={isClearConfirmOpen}
+        onClose={() => setIsClearConfirmOpen(false)}
+        onConfirm={clearCart}
+        title={t('pos.clearCartConfirmTitle')}
+        message={t('pos.clearCartConfirmMessage')}
+        confirmLabel={t('pos.clearCart')}
+        variant="danger"
+      />
 
       {/* Generated Receipt Modal (FR-16) */}
       <ReceiptModal

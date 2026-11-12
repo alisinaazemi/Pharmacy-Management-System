@@ -30,6 +30,7 @@ const MainLayout: React.FC = () => {
     setActiveView,
     hasPermission,
     currentRole,
+    getRoleLabel,
     isLoggedIn,
     t,
   } = useApp();
@@ -74,7 +75,7 @@ const MainLayout: React.FC = () => {
                 {t('roles.restrictedAccess')}
               </h2>
               <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
-                {t('roles.restrictedMessage')} ({currentRole})
+                {t('roles.restrictedMessage')} ({getRoleLabel(currentRole)})
               </p>
               <div className="pt-2">
                 <Button
@@ -82,7 +83,7 @@ const MainLayout: React.FC = () => {
                   size="sm"
                   onClick={() => setActiveView('dashboard')}
                 >
-                  Return to Dashboard
+                  {t('returnToDashboard')}
                 </Button>
               </div>
             </div>

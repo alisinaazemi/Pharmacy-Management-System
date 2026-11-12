@@ -1,12 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Plus,
-  Filter,
   Eye,
   Edit2,
   Power,
-  Pill,
   AlertTriangle,
   Clock,
   ArrowUpDown,
@@ -16,12 +14,16 @@ import { Medicine } from '../../types';
 import { Button } from '../common/Button';
 import { MedicineModal } from './MedicineModal';
 import { MedicineDetailModal } from './MedicineDetailModal';
+import { ConfirmModal } from '../common/ConfirmModal';
+import { Pagination } from '../common/Pagination';
 
 interface MedicinesViewProps {
   onOpenAddMedicine: () => void;
   isAddModalOpen: boolean;
   onCloseAddModal: () => void;
 }
+
+const PAGE_SIZE = 10;
 
 export const MedicinesView: React.FC<MedicinesViewProps> = ({
   onOpenAddMedicine,
@@ -33,40 +35,42 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
     categories,
     toggleMedicineActive,
     formatCurrency,
+    formatDate,
+    getCategoryName,
     currentRole,
+    language,
     t,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [selectedStatus, setSelectedStatus] = useState<string>('all'); // all, inStock, lowStock, expired, nearExpiry, inactive
+  const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [medicineToEdit, setMedicineToEdit] = useState<Medicine | null>(null);
   const [medicineToView, setMedicineToView] = useState<Medicine | null>(null);
+  const [medicineToToggle, setMedicineToToggle] = useState<Medicine | null>(null);
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'expiry' | 'price'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [currentPage, setCurrentPage] = useState(1);
 
   const today = new Date();
 
-  // Filter & Search Logic (FR-06)
   const filteredMedicines = useMemo(() => {
     return medicines
       .filter((med) => {
-        // Search across name, generic name, category, manufacturer, batch
         const q = searchQuery.toLowerCase().trim();
+        const catLabel = getCategoryName(med.categoryId, med.categoryName).toLowerCase();
         const matchesSearch =
           !q ||
           med.name.toLowerCase().includes(q) ||
           (med.genericName && med.genericName.toLowerCase().includes(q)) ||
           med.categoryName.toLowerCase().includes(q) ||
+          catLabel.includes(q) ||
           (med.manufacturer && med.manufacturer.toLowerCase().includes(q)) ||
           med.batchNumber.toLowerCase().includes(q) ||
           med.id.toLowerCase().includes(q);
 
-        // Category filter
-        const matchesCategory =
-          selectedCategory === 'all' || med.categoryId === selectedCategory;
+        const matchesCategory = selectedCategory === 'all' || med.categoryId === selectedCategory;
 
-        // Stock & Expiration filter
         const expDate = new Date(med.expirationDate);
         const isExpired = expDate < today;
         const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
@@ -85,8 +89,8 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
         return matchesSearch && matchesCategory && matchesStatus;
       })
       .sort((a, b) => {
-        let valA: any = a.name;
-        let valB: any = b.name;
+        let valA: string | number = a.name;
+        let valB: string | number = b.name;
         if (sortBy === 'stock') {
           valA = a.quantity;
           valB = b.quantity;
@@ -101,7 +105,16 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
         if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
         return 0;
       });
-  }, [medicines, searchQuery, selectedCategory, selectedStatus, sortBy, sortOrder]);
+  }, [medicines, searchQuery, selectedCategory, selectedStatus, sortBy, sortOrder, getCategoryName]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedCategory, selectedStatus]);
+
+  const paginatedMedicines = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return filteredMedicines.slice(start, start + PAGE_SIZE);
+  }, [filteredMedicines, currentPage]);
 
   const toggleSort = (field: 'name' | 'stock' | 'expiry' | 'price') => {
     if (sortBy === field) {
@@ -140,7 +153,6 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
       {/* Filter and Search Bar (FR-06) */}
       <div className="p-4 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          {/* Search Box */}
           <div className="md:col-span-2 relative">
             <Search className="w-4 h-4 absolute start-3 top-2.5 text-neutral-400 pointer-events-none" />
             <input
@@ -152,7 +164,6 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
             />
           </div>
 
-          {/* Category Filter */}
           <div>
             <select
               value={selectedCategory}
@@ -162,13 +173,12 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
               <option value="all">{t('medicines.allCategories')}</option>
               {categories.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {language === 'fa' ? c.nameFa || c.name : c.name}
                 </option>
               ))}
             </select>
           </div>
 
-          {/* Status Filter */}
           <div>
             <select
               value={selectedStatus}
@@ -186,13 +196,13 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
           </div>
         </div>
 
-        {/* Counter Info */}
-        <div className="flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400 pt-1 border-t border-neutral-100 dark:border-neutral-800">
-          <span>
-            {filteredMedicines.length} {t('common.items')} found
+        <div className="flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400 pt-2 border-t border-neutral-100 dark:border-neutral-800">
+          <span className="tabular-nums">
+            {filteredMedicines.length} {t('common.items')} · {t('common.found')}
           </span>
           {(searchQuery || selectedCategory !== 'all' || selectedStatus !== 'all') && (
             <button
+              type="button"
               onClick={() => {
                 setSearchQuery('');
                 setSelectedCategory('all');
@@ -200,7 +210,7 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
               }}
               className="text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
             >
-              {t('common.clear')} {t('common.filter')}
+              {t('common.clearFilters')}
             </button>
           )}
         </div>
@@ -256,14 +266,14 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
-              {filteredMedicines.length === 0 ? (
+              {paginatedMedicines.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="py-12 text-center text-neutral-400">
                     {t('common.noResults')}
                   </td>
                 </tr>
               ) : (
-                filteredMedicines.map((med) => {
+                paginatedMedicines.map((med) => {
                   const expDate = new Date(med.expirationDate);
                   const isExpired = expDate < today;
                   const diffDays = Math.ceil((expDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
@@ -278,12 +288,9 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
                         !med.isActive ? 'opacity-60 bg-neutral-50/50 dark:bg-neutral-900/30' : ''
                       }`}
                     >
-                      {/* ID */}
                       <td className="py-3 px-3 font-mono font-semibold text-neutral-900 dark:text-neutral-100">
                         {med.id}
                       </td>
-
-                      {/* Name & Generic */}
                       <td className="py-3 px-3">
                         <div className="font-semibold text-neutral-900 dark:text-neutral-100">
                           {med.name}
@@ -294,18 +301,12 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
                           </div>
                         )}
                       </td>
-
-                      {/* Category */}
                       <td className="py-3 px-3 text-neutral-600 dark:text-neutral-300">
-                        {med.categoryName}
+                        {getCategoryName(med.categoryId, med.categoryName)}
                       </td>
-
-                      {/* Batch */}
                       <td className="py-3 px-3 font-mono text-neutral-600 dark:text-neutral-400">
                         {med.batchNumber}
                       </td>
-
-                      {/* Stock Quantity & Unit */}
                       <td className="py-3 px-3 text-center">
                         <div className="flex flex-col items-center">
                           <span
@@ -319,23 +320,17 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
                           >
                             {med.quantity}
                           </span>
-                          <span className="text-[10px] text-neutral-400">
-                            {med.unit}
-                          </span>
+                          <span className="text-[10px] text-neutral-400">{med.unit}</span>
                         </div>
                       </td>
-
-                      {/* Buy / Sell Price */}
                       <td className="py-3 px-3 text-end tabular-nums">
                         <div className="font-semibold text-emerald-600 dark:text-emerald-400">
                           {formatCurrency(med.sellingPrice)}
                         </div>
                         <div className="text-[10px] text-neutral-400">
-                          Buy: {formatCurrency(med.purchasePrice)}
+                          {t('medicines.buyPrefix')}: {formatCurrency(med.purchasePrice)}
                         </div>
                       </td>
-
-                      {/* Expiration Date */}
                       <td className="py-3 px-3">
                         <div
                           className={`flex items-center gap-1 font-mono tabular-nums ${
@@ -348,11 +343,9 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
                         >
                           {isExpired && <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
                           {isNearExpiry && !isExpired && <Clock className="w-3.5 h-3.5 shrink-0" />}
-                          <span>{med.expirationDate}</span>
+                          <span>{formatDate(med.expirationDate)}</span>
                         </div>
                       </td>
-
-                      {/* Active Status */}
                       <td className="py-3 px-3 text-center">
                         <span
                           className={`inline-block text-[11px] font-semibold ${
@@ -364,13 +357,12 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
                           {med.isActive ? t('common.active') : t('common.inactive')}
                         </span>
                       </td>
-
-                      {/* Actions */}
                       <td className="py-3 px-3 text-center">
                         <div className="flex items-center justify-center gap-1">
                           <button
+                            type="button"
                             onClick={() => setMedicineToView(med)}
-                            className="p-1 rounded-md text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                            className="p-1.5 rounded-md text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
                             title={t('common.viewDetails')}
                           >
                             <Eye className="w-3.5 h-3.5" />
@@ -379,15 +371,17 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
                           {currentRole !== 'Cashier' && (
                             <>
                               <button
+                                type="button"
                                 onClick={() => setMedicineToEdit(med)}
-                                className="p-1 rounded-md text-blue-600 hover:text-blue-800 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors cursor-pointer"
+                                className="p-1.5 rounded-md text-blue-600 hover:text-blue-800 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 transition-colors cursor-pointer"
                                 title={t('common.edit')}
                               >
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
                               <button
-                                onClick={() => toggleMedicineActive(med.id)}
-                                className={`p-1 rounded-md transition-colors cursor-pointer ${
+                                type="button"
+                                onClick={() => setMedicineToToggle(med)}
+                                className={`p-1.5 rounded-md transition-colors cursor-pointer ${
                                   med.isActive
                                     ? 'text-neutral-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40'
                                     : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/40'
@@ -407,6 +401,13 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          currentPage={currentPage}
+          totalItems={filteredMedicines.length}
+          pageSize={PAGE_SIZE}
+          onPageChange={setCurrentPage}
+        />
       </div>
 
       {/* Add / Edit Medicine Modal */}
@@ -425,6 +426,29 @@ export const MedicinesView: React.FC<MedicinesViewProps> = ({
         onClose={() => setMedicineToView(null)}
         medicine={medicineToView}
         onEdit={(med) => setMedicineToEdit(med)}
+      />
+
+      {/* Soft Deactivate / Reactivate Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(medicineToToggle)}
+        onClose={() => setMedicineToToggle(null)}
+        onConfirm={() => {
+          if (medicineToToggle) toggleMedicineActive(medicineToToggle.id);
+        }}
+        title={
+          medicineToToggle?.isActive
+            ? t('medicines.deactivateConfirmTitle')
+            : t('medicines.activateConfirmTitle')
+        }
+        message={
+          medicineToToggle
+            ? medicineToToggle.isActive
+              ? t('medicines.deactivateConfirm', { name: medicineToToggle.name })
+              : t('medicines.activateConfirm', { name: medicineToToggle.name })
+            : ''
+        }
+        confirmLabel={medicineToToggle?.isActive ? t('common.deactivate') : t('common.activate')}
+        variant={medicineToToggle?.isActive ? 'danger' : 'primary'}
       />
     </div>
   );

@@ -12,7 +12,6 @@ import {
   Users,
   Settings,
   FileCheck2,
-  AlertTriangle,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ActiveView } from '../../types';
@@ -28,6 +27,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
     setActiveView,
     hasPermission,
     currentRole,
+    getRoleLabel,
     lowStockMedicines,
     expiredMedicines,
     t,
@@ -72,7 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
       labelKey: 'nav.inventory',
       icon: <Boxes className="w-4 h-4" />,
       badgeCount: lowStockMedicines.length + expiredMedicines.length,
-      badgeColor: 'text-amber-600 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-400',
+      badgeColor: 'text-amber-700 bg-amber-100 dark:bg-amber-950/60 dark:text-amber-300',
     },
     {
       id: 'purchases',
@@ -113,7 +113,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
 
   return (
     <>
-      {/* Mobile backdrop */}
       {isMobileOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50 backdrop-blur-xs lg:hidden no-print"
@@ -121,14 +120,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
         />
       )}
 
-      {/* Sidebar container */}
       <aside
         className={`fixed lg:sticky top-16 start-0 z-40 w-64 h-[calc(100vh-4rem)] bg-white dark:bg-neutral-900 border-e border-neutral-200 dark:border-neutral-800 transition-transform duration-200 ease-in-out lg:translate-x-0 no-print flex flex-col justify-between overflow-y-auto ${
           isMobileOpen ? 'translate-x-0' : '-translate-x-full rtl:translate-x-full'
         }`}
       >
         <div className="p-3 space-y-1">
-          <div className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-neutral-400 dark:text-neutral-500">
+          <div className="px-3 py-2 text-[11px] font-bold tracking-wide text-neutral-400 dark:text-neutral-500">
             {t('appName')}
           </div>
 
@@ -141,6 +139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
 
               return (
                 <button
+                  type="button"
                   key={item.id}
                   onClick={() => handleNavClick(item.id)}
                   className={`w-full flex items-center justify-between px-3 py-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer group ${
@@ -179,7 +178,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ isMobileOpen, onCloseMobile })
         <div className="p-3 m-3 rounded-lg bg-neutral-50 dark:bg-neutral-800/60 border border-neutral-200 dark:border-neutral-800 text-xs">
           <div className="flex items-center justify-between text-neutral-500 dark:text-neutral-400 text-[11px]">
             <span>{t('roles.currentRole')}</span>
-            <span className="font-bold text-neutral-800 dark:text-neutral-200">{currentRole}</span>
+            <span className="font-bold text-neutral-800 dark:text-neutral-200">
+              {getRoleLabel(currentRole)}
+            </span>
           </div>
           <p className="mt-1 text-[11px] text-neutral-500 dark:text-neutral-400 line-clamp-2">
             {currentRole === 'Admin'

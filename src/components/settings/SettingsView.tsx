@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { Settings, Save, Download, RotateCcw, ShieldCheck, Database, Building } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings, Save, Download, RotateCcw, Database, Building } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Button } from '../common/Button';
 import { Input, Select } from '../common/Input';
+import { ConfirmModal } from '../common/ConfirmModal';
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export const SettingsView: React.FC = () => {
   const {
@@ -21,10 +24,59 @@ export const SettingsView: React.FC = () => {
   } = useApp();
 
   const [formData, setFormData] = useState({ ...settings });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+
+  useEffect(() => {
+    setFormData({ ...settings });
+    setErrors({});
+  }, [settings]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    updateSettings(formData);
+    const err: Record<string, string> = {};
+
+    if (!formData.pharmacyName.trim()) err.pharmacyName = t('validation.requiredField');
+    if (!formData.pharmacyNameFa.trim()) err.pharmacyNameFa = t('validation.requiredField');
+    if (!formData.licenseNumber.trim()) err.licenseNumber = t('validation.requiredField');
+
+    const phoneDigits = formData.phone.replace(/\D/g, '');
+    if (!formData.phone.trim()) {
+      err.phone = t('validation.requiredField');
+    } else if (phoneDigits.length < 7) {
+      err.phone = t('validation.invalidPhone');
+    }
+
+    if (!formData.email.trim()) {
+      err.email = t('validation.requiredField');
+    } else if (!EMAIL_REGEX.test(formData.email.trim())) {
+      err.email = t('validation.invalidEmail');
+    }
+
+    if (formData.defaultMinStockLevel < 1) {
+      err.defaultMinStockLevel = t('validation.positiveNumber');
+    }
+
+    if (formData.taxRatePercent < 0 || formData.taxRatePercent > 100) {
+      err.taxRatePercent = t('validation.taxRange');
+    }
+
+    if (Object.keys(err).length > 0) {
+      setErrors(err);
+      return;
+    }
+
+    setErrors({});
+    updateSettings({
+      ...formData,
+      pharmacyName: formData.pharmacyName.trim(),
+      pharmacyNameFa: formData.pharmacyNameFa.trim(),
+      licenseNumber: formData.licenseNumber.trim(),
+      phone: formData.phone.trim(),
+      email: formData.email.trim(),
+      address: formData.address.trim(),
+      addressFa: formData.addressFa.trim(),
+    });
   };
 
   const handleDownloadBackup = () => {
@@ -38,27 +90,22 @@ export const SettingsView: React.FC = () => {
       sales,
       purchases,
       inventoryTransactions,
-      users: users.map((u) => ({ ...u, passwordHash: 'protected' })),
+      users: users.map((u) => ({ ...u })),
     };
 
-    const dataStr = 'data:text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(backupData, null, 2));
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
     const downloadAnchor = document.createElement('a');
-    downloadAnchor.setAttribute('href', dataStr);
-    downloadAnchor.setAttribute(
-      'download',
-      `pms-backup-${new Date().toISOString().split('T')[0]}.json`
-    );
+    downloadAnchor.href = url;
+    downloadAnchor.download = `pms-backup-${new Date().toISOString().split('T')[0]}.json`;
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
+    URL.revokeObjectURL(url);
 
-    addToast('success', t('settings.backupSuccess'), 'Snapshot JSON created and downloaded.');
-  };
-
-  const handleResetData = () => {
-    if (confirm('Are you sure you want to reset all mock data to the initial project charter state?')) {
-      resetAllData();
-    }
+    addToast('success', t('settings.backupSuccess'), t('settings.backupSuccessDetail'));
   };
 
   return (
@@ -73,7 +120,7 @@ export const SettingsView: React.FC = () => {
         </p>
       </div>
 
-      <form onSubmit={handleSave} className="space-y-6 text-xs">
+      <form onSubmit={handleSave} className="space-y-6 text-xs" noValidate>
         {/* Pharmacy Profile Card */}
         <div className="p-5 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl space-y-4">
           <h2 className="text-sm font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
@@ -83,37 +130,42 @@ export const SettingsView: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Input
-              label={t('settings.pharmacyNameEn')}
+              label={`${t('settings.pharmacyNameEn')} *`}
               value={formData.pharmacyName}
               onChange={(e) => setFormData({ ...formData, pharmacyName: e.target.value })}
+              error={errors.pharmacyName}
               required
             />
             <Input
-              label={t('settings.pharmacyNameFa')}
+              label={`${t('settings.pharmacyNameFa')} *`}
               value={formData.pharmacyNameFa}
               onChange={(e) => setFormData({ ...formData, pharmacyNameFa: e.target.value })}
+              error={errors.pharmacyNameFa}
               required
             />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Input
-              label={t('settings.licenseNumber')}
+              label={`${t('settings.licenseNumber')} *`}
               value={formData.licenseNumber}
               onChange={(e) => setFormData({ ...formData, licenseNumber: e.target.value })}
+              error={errors.licenseNumber}
               required
             />
             <Input
-              label={t('settings.phone')}
+              label={`${t('settings.phone')} *`}
               value={formData.phone}
               onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+              error={errors.phone}
               required
             />
             <Input
-              label={t('settings.email')}
+              label={`${t('settings.email')} *`}
               type="email"
               value={formData.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+              error={errors.email}
               required
             />
           </div>
@@ -143,7 +195,9 @@ export const SettingsView: React.FC = () => {
             <Select
               label={t('settings.currency')}
               value={formData.currency}
-              onChange={(e) => setFormData({ ...formData, currency: e.target.value as any })}
+              onChange={(e) =>
+                setFormData({ ...formData, currency: e.target.value as 'AFN' | 'USD' })
+              }
               options={[
                 { value: 'AFN', label: t('settings.currencyAfnDesc') },
                 { value: 'USD', label: t('settings.currencyUsdDesc') },
@@ -157,15 +211,17 @@ export const SettingsView: React.FC = () => {
               onChange={(e) =>
                 setFormData({
                   ...formData,
-                  defaultMinStockLevel: parseInt(e.target.value, 10) || 10,
+                  defaultMinStockLevel: parseInt(e.target.value, 10) || 0,
                 })
               }
+              error={errors.defaultMinStockLevel}
             />
             <Input
               label={t('settings.taxRate')}
               type="number"
               min="0"
               max="100"
+              step="0.5"
               value={formData.taxRatePercent}
               onChange={(e) =>
                 setFormData({
@@ -173,6 +229,7 @@ export const SettingsView: React.FC = () => {
                   taxRatePercent: parseFloat(e.target.value) || 0,
                 })
               }
+              error={errors.taxRatePercent}
             />
           </div>
 
@@ -234,13 +291,24 @@ export const SettingsView: React.FC = () => {
               variant="secondary"
               size="sm"
               icon={<RotateCcw className="w-3.5 h-3.5" />}
-              onClick={handleResetData}
+              onClick={() => setIsResetConfirmOpen(true)}
             >
-              Reset Seed Data to Demo
+              {t('settings.resetDemoData')}
             </Button>
           </div>
         </div>
       </form>
+
+      {/* Reset Demo Data Confirmation */}
+      <ConfirmModal
+        isOpen={isResetConfirmOpen}
+        onClose={() => setIsResetConfirmOpen(false)}
+        onConfirm={resetAllData}
+        title={t('settings.resetConfirmTitle')}
+        message={t('settings.resetConfirmMessage')}
+        confirmLabel={t('settings.resetDemoData')}
+        variant="danger"
+      />
     </div>
   );
 };

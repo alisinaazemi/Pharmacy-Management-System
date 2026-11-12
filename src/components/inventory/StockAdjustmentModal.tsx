@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Modal } from '../common/Modal';
 import { Button } from '../common/Button';
 import { Input, Select } from '../common/Input';
@@ -18,45 +18,58 @@ export const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({
 }) => {
   const { medicines, adjustStock, currentUser, t } = useApp();
 
-  const [medicineId, setMedicineId] = useState(preselectedMedicineId || (medicines[0]?.id ?? ''));
+  const selectableMedicines = useMemo(() => {
+    return medicines.filter((m) => m.isActive || m.id === preselectedMedicineId);
+  }, [medicines, preselectedMedicineId]);
+
+  const [medicineId, setMedicineId] = useState(
+    preselectedMedicineId || (selectableMedicines[0]?.id ?? '')
+  );
   const [adjustmentType, setAdjustmentType] = useState<InventoryChangeType>('Stock Adjustment');
-  const [quantityDelta, setQuantityDelta] = useState<number>(0);
+  const [quantityDelta, setQuantityDelta] = useState<string>('');
   const [reason, setReason] = useState<string>('');
   const [error, setError] = useState<string>('');
 
-  React.useEffect(() => {
+  useEffect(() => {
+    if (!isOpen) return;
     if (preselectedMedicineId) {
       setMedicineId(preselectedMedicineId);
-    } else if (medicines[0]) {
-      setMedicineId(medicines[0].id);
+    } else if (selectableMedicines[0]) {
+      setMedicineId(selectableMedicines[0].id);
     }
-    setQuantityDelta(0);
+    setAdjustmentType('Stock Adjustment');
+    setQuantityDelta('');
     setReason('');
     setError('');
-  }, [isOpen, preselectedMedicineId, medicines]);
+  }, [isOpen, preselectedMedicineId, selectableMedicines]);
 
   const selectedMed = medicines.find((m) => m.id === medicineId);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     if (!medicineId) {
       setError(t('validation.requiredField'));
       return;
     }
-    if (quantityDelta === 0) {
-      setError('Adjustment quantity cannot be 0.');
-      return;
-    }
-    if (selectedMed && selectedMed.quantity + quantityDelta < 0) {
-      setError(`Cannot reduce below 0. Current stock is ${selectedMed.quantity}.`);
-      return;
-    }
-    if (!reason.trim()) {
-      setError('Please provide a reason or audit note.');
+
+    const parsedDelta = parseInt(quantityDelta, 10);
+    if (Number.isNaN(parsedDelta) || parsedDelta === 0) {
+      setError(t('inventory.zeroDeltaError'));
       return;
     }
 
-    adjustStock(medicineId, quantityDelta, adjustmentType, reason);
+    if (selectedMed && selectedMed.quantity + parsedDelta < 0) {
+      setError(t('inventory.belowZeroError', { qty: selectedMed.quantity }));
+      return;
+    }
+
+    if (!reason.trim()) {
+      setError(t('inventory.reasonRequiredError'));
+      return;
+    }
+
+    adjustStock(medicineId, parsedDelta, adjustmentType, reason.trim());
     onClose();
   };
 
@@ -74,20 +87,26 @@ export const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({
       subtitle={t('inventory.adjustModalSubtitle')}
       maxWidth="md"
     >
-      <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+      <form onSubmit={handleSubmit} className="space-y-4 text-xs" noValidate>
         <Select
           label={t('inventory.selectMedicine')}
           value={medicineId}
           onChange={(e) => setMedicineId(e.target.value)}
-          options={medicines.map((m) => ({
+          options={selectableMedicines.map((m) => ({
             value: m.id,
-            label: `${m.name} (Current Stock: ${m.quantity} ${m.unit})`,
+            label: t('inventory.currentStockOption', {
+              name: m.name,
+              qty: m.quantity,
+              unit: m.unit,
+            }),
           }))}
         />
 
         {selectedMed && (
           <div className="p-3 bg-neutral-50 dark:bg-neutral-800/60 rounded-lg border border-neutral-200 dark:border-neutral-800 flex justify-between">
-            <span className="text-neutral-500">{t('medicines.stockQuantity')}:</span>
+            <span className="text-neutral-500 dark:text-neutral-400">
+              {t('medicines.stockQuantity')}:
+            </span>
             <span className="font-mono font-bold text-neutral-900 dark:text-neutral-100 tabular-nums">
               {selectedMed.quantity} {selectedMed.unit}
             </span>
@@ -105,32 +124,36 @@ export const StockAdjustmentModal: React.FC<StockAdjustmentModalProps> = ({
           label={t('inventory.quantityDelta')}
           type="number"
           step="1"
-          placeholder="e.g. +10 for inward correction, -5 for damage"
-          value={quantityDelta || ''}
-          onChange={(e) => setQuantityDelta(parseInt(e.target.value, 10) || 0)}
-          helperText="Use positive numbers to add stock, negative numbers to write off stock."
+          placeholder={t('inventory.quantityDeltaPlaceholder')}
+          value={quantityDelta}
+          onChange={(e) => setQuantityDelta(e.target.value)}
+          helperText={t('inventory.quantityDeltaHelper')}
         />
 
         <div>
           <label className="block text-xs font-semibold text-neutral-700 dark:text-neutral-300 mb-1">
-            {t('inventory.reason')}
+            {t('inventory.reason')} *
           </label>
           <textarea
             rows={2}
             className="w-full rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 text-xs px-3 py-2 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Audit log reason (e.g. Periodic physical count discrepancy, cracked vial)..."
+            placeholder={t('inventory.reasonPlaceholder')}
             required
           />
         </div>
 
-        <div className="p-3 bg-neutral-50 dark:bg-neutral-800/40 rounded-lg flex justify-between text-neutral-500">
+        <div className="p-3 bg-neutral-50 dark:bg-neutral-800/40 rounded-lg flex justify-between text-neutral-500 dark:text-neutral-400">
           <span>{t('inventory.userResponsible')}:</span>
-          <span className="font-semibold text-neutral-800 dark:text-neutral-200">{currentUser.name}</span>
+          <span className="font-semibold text-neutral-800 dark:text-neutral-200">
+            {currentUser.name}
+          </span>
         </div>
 
-        {error && <p className="text-rose-600 dark:text-rose-400 font-semibold">{error}</p>}
+        {error && (
+          <p className="text-rose-600 dark:text-rose-400 font-semibold">{error}</p>
+        )}
 
         <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-200 dark:border-neutral-800">
           <Button type="button" variant="outline" size="sm" onClick={onClose}>
